@@ -91,3 +91,21 @@ def test_parse_cli_and_searxng_shapes():
     as_list = [{"link": "https://c.example/", "title": "C"}]
     got = client._parse_results(as_list, "searxng", "q")
     assert got[0].url == "https://c.example/" and got[0].engine == "searxng"
+
+
+def test_auto_mode_unreachable_server_is_noted(monkeypatch):
+    """A dead server_base_url must surface in report.notes even in auto mode.
+
+    On Render a missing/misconfigured OMNISEARCH_DISCOVERY_SERVER_BASE_URL
+    used to fail silently (notes only appeared when mode was forced to
+    "server"), leaving /api/health with server=false and notes=[].
+    """
+    import asyncio
+
+    monkeypatch.setenv("OMNISEARCH_DISCOVERY_SERVER_BASE_URL",
+                       "http://127.0.0.1:9")
+    client = FastCRWClient(load_config())
+    report = asyncio.run(client.detect())
+    assert report.server is False
+    assert any("crw server unreachable at http://127.0.0.1:9" in n
+               for n in report.notes), report.notes

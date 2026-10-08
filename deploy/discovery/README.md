@@ -53,6 +53,21 @@ CRW_HOST=0.0.0.0 CRW_PORT=3000 \
   crw serve
 ```
 
+**Laptops behind home NAT (can't be reached from Render directly):**
+add a free Cloudflare quick tunnel — it gives your box a public HTTPS URL:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:3001   # install: releases/latest/download/cloudflared-linux-amd64
+# → https://<random>.trycloudflare.com   ← this is your server_base_url
+```
+
+Or skip all of the above with the one-shot script (starts serve + tunnel,
+prints the exact Render env vars — idempotent, re-run after reboot):
+
+```bash
+./deploy/discovery/start-local-box.sh
+```
+
 ## 4. Verify
 
 ```bash

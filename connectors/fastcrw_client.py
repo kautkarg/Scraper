@@ -315,7 +315,9 @@ class FastCRWClient:
                                       and str(body.get("status", "")).lower() in {"ok", "healthy"})
             except Exception:
                 self.report.server = False
-            if not self.report.server and want == "server":
+            if not self.report.server and want in {"auto", "server"}:
+                # note in auto mode too — a dead server_url (env var missing
+                # or box unreachable) was previously an invisible failure
                 self.report.notes.append(f"crw server unreachable at {self.server_url}")
         if want in {"auto", "searxng"} and self.searxng_url:
             try:
