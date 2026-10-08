@@ -1,0 +1,30 @@
+# fastCRW serve — discovery box systemd unit.
+#
+# Install (as root):
+#   1. sudo mkdir -p /etc/omnisearch && sudo chmod 700 /etc/omnisearch
+#   2. create /etc/omnisearch/crw.env (chmod 600):
+#        CRW_SEARCH_BACKEND_URL=http://127.0.0.1:8888
+#        CRW_AUTH__API_KEYS=change-me-long-random-string
+#        CRW_HOST=0.0.0.0
+#        CRW_PORT=3000
+#   3. adjust ExecStart below to where the installer put crw
+#      (usually /home/<user>/.local/bin/crw — check with `which crw`)
+#   4. sudo cp omnisearch-crw.service /etc/systemd/system/
+#      sudo systemctl daemon-reload && sudo systemctl enable --now omnisearch-crw
+
+[Unit]
+Description=fastCRW serve API for Project Omnisearch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/omnisearch/crw.env
+ExecStart=/home/deploy/.local/bin/crw serve
+Restart=on-failure
+RestartSec=3
+# Light hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

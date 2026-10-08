@@ -1,0 +1,16 @@
+# SearXNG settings for Omnisearch discovery — enables the JSON API used by
+# both our FastCRWClient and the `crw search --searxng-url` backend.
+use_default_settings: true
+
+search:
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "omnisearch-local-only-rotate-if-exposed"
+  limiter: false
+  image_proxy: true
+
+ui:
+  static_use_hash: true

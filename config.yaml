@@ -1,0 +1,77 @@
+# Project Omnisearch — global execution settings
+server:
+  host: 127.0.0.1
+  port: 8000
+
+paths:
+  outputs: ./outputs
+  sqlite_db: ./outputs/omnisearch.db
+
+execution:
+  max_records_per_job: 50
+  max_pages_per_job: 60
+  max_results_per_query: 15
+  max_concurrent_scrapes: 6
+  request_delay_seconds: 0.2
+  timeout_seconds: 20
+  retry_attempts: 2
+  retry_backoff_seconds: 1.5
+  # Status codes treated as "blocked" — logged as a skip, job continues.
+  block_status_codes: [401, 403, 429, 503, 999]
+  # Domains never worth scraping (parked / pure noise heuristics).
+  blocked_domain_patterns:
+    - "parked"
+    - "domain-sale"
+    - "godaddy.com/domainsearch"
+  user_agent: "OmnisearchBot/1.0 (+local research engine)"
+
+discovery:
+  # auto | cli | server | searxng | fallback
+  #   cli     — invoke the local `crw` binary (fastCRW CLI)
+  #   server  — call a self-hosted `crw serve` API (default :3000)
+  #   searxng — direct SearXNG instance for search only
+  #   fallback— plain local httpx fetch (scrape) + seed URLs (discovery)
+  #   auto    — probe cli, then server, then searxng, then fallback
+  mode: auto
+  crw_bin: crw
+  server_base_url: http://127.0.0.1:3000
+  # Set when the remote `crw serve` runs with CRW_AUTH__API_KEYS set;
+  # sent as `Authorization: Bearer <key>` to that server only.
+  server_api_key: ""
+  searxng_base_url: http://127.0.0.1:8888
+  # Only used when nothing above is reachable — keeps the pipeline runnable.
+  allow_http_fallback: true
+
+llm:
+  # Optional LLM for query formulation and markdown -> JSON mapping.
+  # Disabled => deterministic heuristics are used instead.
+  #
+  # mode: opencode  -> shells out to `opencode run --pure -m <model>`.
+  #       This is how OpenCode Zen *free* models work (e.g. the MiMo
+  #       free tier): Zen rejects direct HTTP calls with 403, but the
+  #       opencode CLI attaches its own client ticket. Cost: $0.
+  #       Requires opencode >= 1.18 on PATH.
+  # mode: openai    -> plain HTTP to base_url/chat/completions
+  #       (any local OpenAI-compatible server: Mimo, Ollama, llama.cpp).
+  enabled: true
+  mode: opencode
+  model: opencode/mimo-v2.6-flash-free
+  opencode_bin: opencode
+  timeout_seconds: 120
+  # -- only used when mode: openai --
+  base_url: http://127.0.0.1:8080/v1
+  api_key: ""
+  temperature: 0.1
+
+integrations:
+  google_sheets:
+    # Path to a Google service-account JSON (kept out of the repo).
+    credentials_file: ./secrets/google_service_account.json
+    spreadsheet_id: ""
+  webhook:
+    url: ""
+    # Optional static headers; ${ENV_VAR} references are expanded.
+    headers: {}
+    timeout_seconds: 15
+    max_retries: 3
+    batch_size: 25

@@ -1,0 +1,45 @@
+# Render Blueprint — Project Omnisearch
+# https://render.com/docs/blueprint-spec
+#
+# Architecture: Render hosts the FastAPI app + web UI; a separate box
+# (your laptop or a $5 VPS) runs `crw serve` + SearXNG for search/scrape.
+# See deploy/discovery/README.md for the discovery-box setup.
+services:
+  - type: web
+    name: omnisearch
+    runtime: python
+    plan: free
+    branch: main
+    # pip must succeed; opencode is only fetched when the LLM is enabled
+    # (the binary is ~185 MB — opt-in via OMNISEARCH_LLM_ENABLED).
+    buildCommand: >-
+      pip install -r requirements.txt || exit 1;
+      if [ "$OMNISEARCH_LLM_ENABLED" = "true" ]; then
+      curl -fsSL https://opencode.ai/install -o /tmp/opencode-install.sh &&
+      sh /tmp/opencode-install.sh || exit 1;
+      fi
+    # Render sets $PORT; bind 0.0.0.0 (loopback-only will fail health checks).
+    startCommand: >-
+      export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH";
+      exec python -m uvicorn main:app --host 0.0.0.0 --port ${PORT}
+    healthCheckPath: /api/health
+    envVars:
+      # Base URL of your `crw serve` box (required for search/scrape via
+      # server engine) — e.g. http://203.0.113.10:3000  [deploy/discovery/]
+      - key: OMNISEARCH_DISCOVERY_SERVER_BASE_URL
+        sync: false
+      # Only if the box runs with CRW_AUTH__API_KEYS set (recommended).
+      - key: OMNISEARCH_DISCOVERY_SERVER_API_KEY
+        sync: false
+      # Mimo LLM via the opencode CLI (free tier, $0). Set to "true" to
+      # opt in: the build then installs opencode and the app uses Mimo
+      # for query planning + record mapping (heuristics otherwise).
+      - key: OMNISEARCH_LLM_ENABLED
+        value: "false"
+      - key: OMNISEARCH_LLM_MODE
+        value: "opencode"
+      # Keep opencode from phoning home for updates inside the container.
+      - key: OPENCODE_DISABLE_AUTOUPDATE
+        value: "1"
+      - key: PYTHONUNBUFFERED
+        value: "1"

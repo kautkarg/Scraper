@@ -1,0 +1,16 @@
+# SearXNG — search backend for fastCRW on the discovery box.
+# JSON format must be enabled (deploy/searxng-settings.yml mounts over the default).
+#
+#   docker compose up -d
+#   curl 'http://127.0.0.1:8888/search?q=test&format=json' | head -c 200
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: omnisearch-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8888:8080"
+    volumes:
+      - ../searxng-settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://127.0.0.1:8888/
