@@ -76,7 +76,7 @@ llm:
   enabled: true
   mode: opencode          # shells out to `opencode run --pure -m <model>`
   model: opencode/mimo-v2.6-flash-free
-  timeout_seconds: 120
+  timeout_seconds: 240    # slow-box headroom; heuristics take over on expiry
 ```
 
 - **`mode: opencode`** — uses OpenCode Zen's *free* MiMo tier through the

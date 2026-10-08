@@ -57,7 +57,10 @@ llm:
   mode: opencode
   model: opencode/mimo-v2.6-flash-free
   opencode_bin: opencode
-  timeout_seconds: 120
+  # opencode cold-start + free-tier Mimo can exceed 2 min on a 0.1-CPU box
+  # (Render free) or under memory pressure — the SSE stream heartbeats so
+  # the proxy tolerates it; on expiry the job falls back to heuristics.
+  timeout_seconds: 240
   # -- only used when mode: openai --
   base_url: http://127.0.0.1:8080/v1
   api_key: ""
