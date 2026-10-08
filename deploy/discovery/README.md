@@ -54,14 +54,21 @@ CRW_HOST=0.0.0.0 CRW_PORT=3000 \
 ```
 
 **Laptops behind home NAT (can't be reached from Render directly):**
-add a free Cloudflare quick tunnel — it gives your box a public HTTPS URL:
+publish the box with **Tailscale Funnel** — free, and the URL is permanent:
 
 ```bash
-cloudflared tunnel --url http://127.0.0.1:3001   # install: releases/latest/download/cloudflared-linux-amd64
-# → https://<random>.trycloudflare.com   ← this is your server_base_url
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up                    # sign in (Personal plan, free)
+sudo tailscale set --operator=$USER   # one-time: allow non-root funnel control
+tailscale funnel 3001                # approve the browser prompt once
+# → https://<machine>.<tailnet>.ts.net   ← permanent server_base_url
 ```
 
-Or skip all of the above with the one-shot script (starts serve + tunnel,
+Alternative (no account): Cloudflare quick tunnel — `cloudflared tunnel --url
+http://127.0.0.1:3001` → a `https://<random>.trycloudflare.com` URL that
+**changes on every restart** (must update Render env each time).
+
+Or skip all of the above with the one-shot script (starts serve + funnel,
 prints the exact Render env vars — idempotent, re-run after reboot):
 
 ```bash
