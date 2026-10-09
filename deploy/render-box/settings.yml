@@ -2,8 +2,14 @@
 # Inherits all defaults, then tunes for a keyless datacenter box:
 #  - JSON output format (the app queries /search?format=json)
 #  - no redis -> limiter/cache disabled (only client is the Render app)
-#  - google disabled: datacenter IPs get captcha'd fast; the remaining
-#    engines (bing, duckduckgo, brave, mojeek, startpage, ...) tolerate them.
+# Engine reality from Render's Oregon datacenter IP (probed live):
+#  - bing is DISABLED in the default searxng engine set but answers
+#    cleanly from a datacenter IP -> enable it (primary web engine)
+#  - brave / duckduckgo / google cse suspend within minutes from a
+#    datacenter IP ("too many requests" / captcha timeouts) and were
+#    poisoning every multi-engine query with 0 results -> disable them
+#  - wikipedia / wikidata stay on (always reachable, useful fallback)
+#  - this build ships no mojeek/startpage/marginalia
 use_default_settings: true
 
 server:
@@ -18,5 +24,13 @@ ui:
   static_use_hash: true
 
 engines:
+  - name: bing
+    disabled: false
   - name: google
+    disabled: true
+  - name: brave
+    disabled: true
+  - name: duckduckgo
+    disabled: true
+  - name: google cse
     disabled: true
