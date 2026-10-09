@@ -8,11 +8,13 @@
 #  - brave / duckduckgo / google cse suspend within minutes from a
 #    datacenter IP ("too many requests" / captcha timeouts) and were
 #    poisoning every multi-engine query with 0 results -> disable them
-#  - yandex / naver / gmx / zapmeta ship disabled but answer cleanly
+#  - yandex / naver / zapmeta ship disabled but answer cleanly
 #    from the datacenter IP AND return local-directory results
 #    (goodfirms, getlatka, startuptalky, techbehemoths, company sites)
 #    for geo queries like "SaaS companies Nagpur" where bing only
 #    returns definitional pages -> enable them
+#  - gmx looked good on first probe but suspends with CAPTCHA from
+#    the datacenter IP -> leave disabled
 #  - wikipedia / wikidata stay on (always reachable, useful fallback)
 #  - this build ships no mojeek/startpage/marginalia
 use_default_settings: true
@@ -39,6 +41,8 @@ engines:
     disabled: false
   - name: zapmeta
     disabled: false
+  - name: gmx
+    disabled: true
   - name: google
     disabled: true
   - name: brave
