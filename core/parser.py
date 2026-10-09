@@ -12,6 +12,7 @@ import re
 from datetime import datetime
 from enum import Enum
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -258,8 +259,8 @@ class RecordParser:
                         value = found.group(0) if found else None
                     elif field.type is FieldType.URL:
                         value = source_url
-                    elif _is_name_field(field) and (title or _first_heading(markdown)):
-                        value = title or _first_heading(markdown)
+                    elif _is_name_field(field):
+                        value = _best_name(title, markdown, source_url)
                 single[field.name] = value
             if any(v for v in single.values()):
                 candidates.append(single)
@@ -273,7 +274,7 @@ class RecordParser:
                 elif field.type is FieldType.URL:
                     bare[field.name] = source_url
                 elif _is_name_field(field):
-                    bare[field.name] = title or _first_heading(markdown) or None
+                    bare[field.name] = _best_name(title, markdown, source_url)
             if any(v for v in bare.values()):
                 candidates.append(bare)
         return candidates
@@ -398,6 +399,39 @@ def _parse_json_container(text: str) -> list[dict[str, Any]]:
 def _is_name_field(field: SchemaField) -> bool:
     return norm_key(field.name) in {"name", "company", "companyname", "title", "startup",
                                     "brand", "product", "organization", "org"}
+
+
+# Titles that identify a page type, never an entity — used as company_name
+# they produce junk like "Home" or "Get in touch" rows.
+_GENERIC_TITLES = frozenset({
+    "home", "homepage", "home page", "welcome", "index", "untitled",
+    "get in touch", "contact", "contact us", "contact page",
+    "about", "about us", "about us!", "login", "sign in", "log in",
+    "search", "404", "404 not found", "not found", "error",
+    "services", "our services", "blog", "careers", "careers home",
+})
+
+
+def _best_name(title: str, markdown: str, source_url: str) -> str | None:
+    """Best entity-name guess: usable title, else first heading, else domain stem."""
+    for candidate in (title.strip(), _first_heading(markdown) or ""):
+        cleaned = re.sub(r"\s*[|\-–—·•]\s*$", "", candidate).strip()
+        if cleaned and cleaned.lower().rstrip("!") not in _GENERIC_TITLES:
+            return cleaned
+    return _name_from_url(source_url)
+
+
+def _name_from_url(url: str) -> str | None:
+    try:
+        host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    except ValueError:
+        return None
+    if not host or "." not in host:
+        return None
+    stem = host.split(".")[0]
+    if not stem or stem.isdigit() or len(stem) < 3:
+        return None
+    return stem[0].upper() + stem[1:]
 
 
 def _first_heading(markdown: str) -> str | None:
