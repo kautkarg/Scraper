@@ -370,7 +370,11 @@ class FastCRWClient:
                 self.log("warn", f"search engine {engine.value} error: {exc}")
         raise DiscoveryError(str(last_error or "all search engines failed"))
 
+    # crw's /v1/search schema caps limit at 20; higher values return HTTP 400.
+    _CRW_SEARCH_MAX_LIMIT = 20
+
     async def _search_server(self, query: str, limit: int) -> list[SearchResult]:
+        limit = max(1, min(limit, self._CRW_SEARCH_MAX_LIMIT))
         r = await self._http.post(f"{self.server_url}/v1/search",
                                   json={"query": query, "limit": limit},
                                   headers=self._server_auth())
