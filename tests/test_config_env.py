@@ -109,3 +109,11 @@ def test_auto_mode_unreachable_server_is_noted(monkeypatch):
     assert report.server is False
     assert any("crw server unreachable at http://127.0.0.1:9" in n
                for n in report.notes), report.notes
+
+
+def test_high_throughput_defaults():
+    """Volume runs target >=500 records — the shipped limits must allow it."""
+    cfg = load_config()
+    assert cfg.get("execution.max_records_per_job") >= 500
+    assert cfg.get("execution.max_pages_per_job") >= 500
+    assert cfg.get("execution.max_results_per_query") >= 15

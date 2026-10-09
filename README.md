@@ -83,8 +83,10 @@ llm:
   opencode CLI (≥ 1.18 on PATH). Zen rejects direct HTTP calls with
   `403 FreeTierError: can only be used from within OpenCode`, so the CLI
   transport attaches the client ticket for you. Cost: **$0**.
-- **`mode: openai`** — plain HTTP to any OpenAI-compatible local server
-  (`base_url` + `api_key`): Ollama, llama.cpp, a self-hosted Mimo, …
+- **`mode: openai`** — plain HTTP to any OpenAI-compatible server
+  (`base_url` + `api_key`): a provider key (OpenAI/Groq/DeepSeek/…),
+  Ollama, llama.cpp, **or this laptop's free MiMo via the funnel** —
+  see [Large runs](#large-runs-500-records) below.
 - **`enabled: false`** — deterministic heuristics only (still fully functional).
 
 LLM output is always gated by `parser.ingest()` schema validation, so
@@ -134,27 +136,64 @@ underscores ignored — parsed as YAML, file < env):
 
 | Variable | Sets | Typical value |
 |---|---|---|
-| `OMNISEARCH_DISCOVERY_SERVER_BASE_URL` | `discovery.server_base_url` | `http://203.0.113.10:3000` |
+| `OMNISEARCH_DISCOVERY_SERVER_BASE_URL` | `discovery.server_base_url` | `https://<machine>.<tailnet>.ts.net` |
 | `OMNISEARCH_DISCOVERY_SERVER_API_KEY` | `discovery.server_api_key` | box key (Bearer) |
 | `OMNISEARCH_LLM_ENABLED` | `llm.enabled` | `true` / `false` |
-| `OMNISEARCH_LLM_MODE` | `llm.mode` | `opencode` / `openai` |
-| `OMNISEARCH_EXECUTION_MAX_RECORDS_PER_JOB` | `execution.max_records_per_job` | `50` |
+| `OMNISEARCH_LLM_MODE` | `llm.mode` | `openai` / `opencode` |
+| `OMNISEARCH_LLM_BASE_URL` | `llm.base_url` | `https://…ts.net:8443/v1` or provider `/v1` |
+| `OMNISEARCH_LLM_API_KEY` | `llm.api_key` | proxy key or provider key |
+| `OMNISEARCH_LLM_MODEL` | `llm.model` | `opencode/mimo-v2.6-flash-free` |
+| `OMNISEARCH_EXECUTION_MAX_RECORDS_PER_JOB` | `execution.max_records_per_job` | `500` |
 
 Unknown `OMNISEARCH_*` names are reported on stderr (typo visibility in
 deploy logs). `OMNISEARCH_CONFIG` still selects a config *file* instead.
 
 ### Free-plan notes
 
-- **LLM is opt-in on Render**: the opencode binary is ~185 MB, so the build
-  only installs it when `OMNISEARCH_LLM_ENABLED=true`. Heuristics work
-  either way; flip the var + redeploy to enable Mimo (then confirm
-  `llm.ready: true` in `/api/health`).
+- **LLM is opt-in on Render**: with `OMNISEARCH_LLM_MODE=openai` (the
+  blueprint default) no extra binary is installed — point the app at the
+  funnel proxy or a provider key. Only `MODE=opencode` downloads the
+  ~185 MB binary at build time. Heuristics work either way; confirm
+  `llm.ready: true` in `/api/health` after flipping the vars.
 - **Spin-down**: free services sleep after 15 min — first request takes
   ~1 min (the SSE stream heartbeats every 15 s to stay under proxy limits).
 - **Ephemeral disk**: `outputs/` and SQLite reset on every redeploy/restart —
   download CSVs or hook a sink for anything you need to keep.
 - The SSE stream sends `: keep-alive` heartbeats, so long Mimo calls don't
   trip reverse-proxy idle timeouts.
+
+## Large runs (500 records)
+
+One run is expected to return **hundreds of precise rows**, not a handful:
+
+- **Target records** — the UI's *Target records* field (default `500`,
+  max `2000`) is sent as `max_records`. API callers can set it directly,
+  or state the count in the intent (`"Find 20 …"`) and it is honored when
+  `max_records` is omitted.
+- **Ceilings** — `execution.max_records_per_job: 500`,
+  `max_pages_per_job: 900`, `max_results_per_query: 25`; the heuristic
+  planner fans out up to 8 queries (LLM planner: 6–10). Override any of
+  them with `OMNISEARCH_*` env vars.
+- **Dedupe** — records collapse only on *identical full rows*, so several
+  companies sharing one contact email or a cross-filled source URL all
+  count as separate records.
+- **Keep the page open** — the job streams over SSE from the browser;
+  closing the tab or letting the Render free plan spin down mid-run stops
+  it. Long runs: keep the tab awake (or run headless via
+  `scripts/e2e_*.py` against the API).
+
+### Choosing the LLM transport (Render)
+
+| Option | When | Env vars |
+|---|---|---|
+| **A. Laptop tunnel (free)** | box script is running | `ENABLED=true`, `MODE=openai`, `BASE_URL=https://<machine>.<tailnet>.ts.net:8443/v1`, `API_KEY=<outputs/llm-proxy-key.txt>`, `MODEL=opencode/mimo-v2.6-flash-free` |
+| **B. Provider key** | you have an API key | `ENABLED=true`, `MODE=openai`, `BASE_URL=<provider>/v1`, `API_KEY=<key>`, `MODEL=<model>` |
+| **C. On-Render opencode** | no laptop, slow is fine | `ENABLED=true`, `MODE=opencode` (build installs the binary) |
+
+Option A is wired automatically: `deploy/discovery/start-local-box.sh`
+starts `deploy/discovery/llm_proxy.py` (OpenAI-compatible, bearer-key
+protected) and publishes it on funnel port **8443** next to the discovery
+box on **443**.
 
 ## Project layout
 

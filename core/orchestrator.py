@@ -158,7 +158,7 @@ _STOPWORDS = {
 }
 
 
-def heuristic_queries(intent: str, fields: list[SchemaField], limit: int = 4) -> list[str]:
+def heuristic_queries(intent: str, fields: list[SchemaField], limit: int = 8) -> list[str]:
     base = re.sub(r"\s+", " ", intent).strip().rstrip(".!?")
     quoted = [m.group(1) or m.group(2) for m in
               re.finditer(r'"([^"]+)"|“([^”]+)”', intent)]
@@ -193,7 +193,7 @@ async def llm_queries(config: Config, intent: str, fields: list[SchemaField],
     schema_hint = ", ".join(f"{f.name}:{f.type.value}" for f in fields)
     prompt = (
         "You are a search-query planner for a data harvesting engine. "
-        "Given a user intent and target schema, produce 3-5 diverse web search "
+        "Given a user intent and target schema, produce 6-10 diverse web search "
         "queries that would surface pages containing those fields. "
         'Respond with JSON only: {"queries": ["..."]}\n\n'
         f"Intent: {intent}\nSchema: {schema_hint}"
@@ -204,7 +204,7 @@ async def llm_queries(config: Config, intent: str, fields: list[SchemaField],
         queries = [str(q) for q in payload.get("queries", []) if q]
         if queries:
             log("info", f"Mimo planner produced {len(queries)} queries")
-            return queries[:5]
+            return queries[:10]
     except Exception as exc:  # noqa: BLE001 — LLM is strictly optional
         log("warn", f"Mimo planner unavailable, using heuristic queries ({exc})")
     return None
@@ -355,7 +355,8 @@ class Orchestrator:
                     parser.mark_page()
                     scraped_urls.append(result.url)
                     self._stage(job_id, "extracting",
-                                f"scraped {result.url} [{result.engine}, {result.elapsed_ms}ms]")
+                                f"scraped {result.url} [{result.engine}, {result.elapsed_ms}ms]"
+                                f" — {len(state.records)}/{max_records} records")
                     llm = await llm_records(self.config, result.markdown, result.url,
                                             request.fields)
                     candidates_records = llm if llm is not None else parser.heuristic_records(

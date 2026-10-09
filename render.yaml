@@ -10,11 +10,12 @@ services:
     runtime: python
     plan: free
     branch: main
-    # pip must succeed; opencode is only fetched when the LLM is enabled
-    # (the binary is ~185 MB — opt-in via OMNISEARCH_LLM_ENABLED).
+    # pip must succeed; opencode (~185 MB) is only fetched when the LLM
+    # actually runs *on Render* (mode: opencode). The two off-box LLM
+    # options below (API key / laptop-tunnel proxy) need no binary.
     buildCommand: >-
       pip install -r requirements.txt || exit 1;
-      if [ "$OMNISEARCH_LLM_ENABLED" = "true" ]; then
+      if [ "$OMNISEARCH_LLM_ENABLED" = "true" ] && [ "$OMNISEARCH_LLM_MODE" = "opencode" ]; then
       curl -fsSL https://opencode.ai/install -o /tmp/opencode-install.sh &&
       sh /tmp/opencode-install.sh || exit 1;
       fi
@@ -31,13 +32,27 @@ services:
       # Only if the box runs with CRW_AUTH__API_KEYS set (recommended).
       - key: OMNISEARCH_DISCOVERY_SERVER_API_KEY
         sync: false
-      # Mimo LLM via the opencode CLI (free tier, $0). Set to "true" to
-      # opt in: the build then installs opencode and the app uses Mimo
-      # for query planning + record mapping (heuristics otherwise).
+      # ---- LLM (optional; heuristics without it) --------------------
+      # Turn on with ONE of three transports:
+      #  A) this laptop's free MiMo via the Tailscale tunnel (recommended,
+      #     $0) — values printed by deploy/discovery/start-local-box.sh:
+      #       OMNISEARCH_LLM_ENABLED=true   OMNISEARCH_LLM_MODE=openai
+      #       OMNISEARCH_LLM_BASE_URL=https://<machine>.<tailnet>.ts.net:8443/v1
+      #       OMNISEARCH_LLM_API_KEY=<llm-proxy-key>   (from outputs/)
+      #       OMNISEARCH_LLM_MODEL=opencode/mimo-v2.6-flash-free
+      #  B) a provider API key (OpenAI/Groq/DeepSeek/OpenRouter …) —
+      #     same four keys, BASE_URL+API_KEY+MODEL of the provider.
+      #  C) opencode on Render itself (MODE=opencode, slow on free tier).
       - key: OMNISEARCH_LLM_ENABLED
         value: "false"
       - key: OMNISEARCH_LLM_MODE
-        value: "opencode"
+        value: "openai"
+      - key: OMNISEARCH_LLM_BASE_URL
+        sync: false
+      - key: OMNISEARCH_LLM_API_KEY
+        sync: false
+      - key: OMNISEARCH_LLM_MODEL
+        sync: false
       # Keep opencode from phoning home for updates inside the container.
       - key: OPENCODE_DISABLE_AUTOUPDATE
         value: "1"

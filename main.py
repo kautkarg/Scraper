@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -39,11 +40,30 @@ class SchemaFieldIn(BaseModel):
     description: str = ""
 
 
+_INTENT_COUNT_RE = re.compile(
+    r"\b(?:find|get|collect|extract|scrape|build|list|gather)\s+(\d{1,4})\b"
+    r"|(\d{1,4})\s*(?:records|rows|results|companies|startups|leads|entries|contacts)\b",
+    re.IGNORECASE)
+
+
+def target_from_intent(intent: str) -> int | None:
+    """Honor an explicit record count in the intent ("find 20 …" -> 20).
+
+    Used only when the request omits ``max_records``; the UI/API field
+    always wins. Returns None when the intent states no count.
+    """
+    m = _INTENT_COUNT_RE.search(intent or "")
+    if not m:
+        return None
+    n = int(m.group(1) or m.group(2))
+    return n if 1 <= n <= 2000 else None
+
+
 class JobCreate(BaseModel):
     intent: str = Field(min_length=3, max_length=2000)
     fields: list[SchemaFieldIn] = Field(min_length=1)
     destination: Destination = Destination.CSV
-    max_records: int | None = Field(default=None, ge=1, le=500)
+    max_records: int | None = Field(default=None, ge=1, le=2000)
     seed_urls: list[str] = []
     table_name: str = "records"
     webhook_url: str = ""
@@ -85,7 +105,10 @@ async def health() -> dict[str, Any]:
 
 @app.post("/api/jobs", response_model=JobAccepted, status_code=202)
 async def create_job(body: JobCreate) -> JobAccepted:
-    request = JobRequest.from_dict(body.model_dump())
+    data = body.model_dump()
+    if data.get("max_records") is None:
+        data["max_records"] = target_from_intent(body.intent)
+    request = JobRequest.from_dict(data)
     state = BUS.create(request)
     state.status = JobStatus.QUEUED
     asyncio.create_task(orchestrator.run(state))

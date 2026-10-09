@@ -352,14 +352,14 @@ class RecordParser:
         self.stats.pages += 1
 
     def _record_key(self, values: dict[str, Any]) -> str:
-        for field in self.fields:
-            if field.type is FieldType.EMAIL and values.get(field.name):
-                return f"email:{values[field.name]}"
-        for field in self.fields:
-            if field.type is FieldType.URL and values.get(field.name):
-                return f"url:{values[field.name]}"
-        parts = [str(values.get(f.name) or "").strip().lower() for f in self.fields[:3]]
-        return "|".join(parts)
+        # Full-row key: only genuinely identical rows collapse. Keying on a
+        # single field (email, or the cross-filled source URL) used to wipe
+        # out whole batches — e.g. every table row of a directory page
+        # sharing url=source_url, or several companies listing the same
+        # generic contact email — capping yields far below the record target.
+        parts = [str(values.get(f.name) or "").strip().lower()
+                 for f in self.fields]
+        return "|".join(parts) if any(parts) else "empty"
 
     # -- utility ---------------------------------------------------------------
     @staticmethod

@@ -290,6 +290,8 @@ td.empty { color: var(--ink-faint); font-style: italic; }
         <button class="chip" type="button" data-fill="Compare pricing tiers of top project management tools">Pricing tiers · PM tools</button>
         <button class="chip" type="button" data-fill="List cybersecurity companies in the US with published SOC 2 reports">SOC 2 · cybersecurity</button>
       </div>
+      <label class="lbl" for="maxRecords" style="margin-top:12px">Target records <span style="text-transform:none;letter-spacing:0">(1–2000, per run)</span></label>
+      <input id="maxRecords" type="number" min="1" max="2000" value="500" />
     </div>
 
     <div data-reveal="3">
@@ -395,6 +397,7 @@ const DEFAULT_FIELDS = [
 let headers = [];
 let running = false;
 let es = null;
+let targetRecords = 0;
 
 /* ---------- schema builder ---------- */
 function buildFieldRow(field = { name: "", type: "string", required: false }) {
@@ -500,7 +503,9 @@ function addRow(values) {
   const wrap = $("gridWrap");
   const nearBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 120;
   if (nearBottom) wrap.scrollTop = wrap.scrollHeight;
-  $("mRecords").textContent = String(tbody.rows.length);
+  $("mRecords").textContent = targetRecords
+    ? `${tbody.rows.length}/${targetRecords}`
+    : String(tbody.rows.length);
 }
 function resetRun() {
   headers = [];
@@ -544,6 +549,8 @@ async function run() {
 
   resetRun();
   running = true;
+  targetRecords = Math.min(2000, Math.max(1, parseInt($("maxRecords").value, 10) || 500));
+  $("mRecords").textContent = `0/${targetRecords}`;
   const btn = $("runBtn");
   btn.classList.add("running"); btn.disabled = true;
   btn.querySelector(".txt").textContent = "RUNNING…";
@@ -555,6 +562,7 @@ async function run() {
   const body = {
     intent, fields,
     destination: $("destination").value,
+    max_records: targetRecords,
     seed_urls: $("seedUrls").value.split(/\s+/).filter(Boolean),
     table_name: $("tableName").value.trim() || "records",
     webhook_url: $("hookUrl").value.trim(),

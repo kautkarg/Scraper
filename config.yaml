@@ -8,9 +8,11 @@ paths:
   sqlite_db: ./outputs/omnisearch.db
 
 execution:
-  max_records_per_job: 50
-  max_pages_per_job: 60
-  max_results_per_query: 15
+  # Throughput ceiling for one run — "find 500 …" must be achievable.
+  # Records stop at this cap OR when the queued source pages run dry.
+  max_records_per_job: 500
+  max_pages_per_job: 900
+  max_results_per_query: 25
   max_concurrent_scrapes: 6
   request_delay_seconds: 0.2
   timeout_seconds: 20
@@ -46,13 +48,25 @@ llm:
   # Optional LLM for query formulation and markdown -> JSON mapping.
   # Disabled => deterministic heuristics are used instead.
   #
+  # Three transport options (pick via `mode` + base_url/api_key, all
+  # overridable with OMNISEARCH_LLM_* env vars — see render.yaml):
+  #
   # mode: opencode  -> shells out to `opencode run --pure -m <model>`.
   #       This is how OpenCode Zen *free* models work (e.g. the MiMo
   #       free tier): Zen rejects direct HTTP calls with 403, but the
   #       opencode CLI attaches its own client ticket. Cost: $0.
   #       Requires opencode >= 1.18 on PATH.
-  # mode: openai    -> plain HTTP to base_url/chat/completions
-  #       (any local OpenAI-compatible server: Mimo, Ollama, llama.cpp).
+  # mode: openai    -> plain HTTP to base_url/chat/completions with an
+  #       API key — any OpenAI-compatible provider (OpenAI, Groq,
+  #       DeepSeek, Gemini-proxy, Ollama, llama.cpp …). Best throughput
+  #       for large (500+) runs.
+  # mode: openai +  -> the SAME openai mode pointed at the laptop's
+  #   tunnel base_url    `llm_proxy.py` published through the Tailscale
+  #       funnel (https://<machine>.<tailnet>.ts.net:8443/v1) — the
+  #       Render app borrows this laptop's opencode/MiMo for free.
+  #
+  # Enable LLM on a Render host by setting env OMNISEARCH_LLM_ENABLED=true
+  # (no config file needed on the server).
   enabled: true
   mode: opencode
   model: opencode/mimo-v2.6-flash-free

@@ -527,3 +527,43 @@ def test_llm_disabled_returns_none_without_dispatch(config, monkeypatch):
     monkeypatch.setattr(llm_mod, "http_complete", http)
     assert asyncio.run(llm_mod.complete(config, "p")) == '{"ok": true}'
     assert called == ["opencode"]
+
+
+def test_dedupe_full_row_key_keeps_distinct_rows():
+    """Rows sharing an email / source URL must all survive (volume runs).
+
+    The old email-first key collapsed whole directory pages — several
+    companies listing one generic contact address, or every row whose
+    url was cross-filled with the page URL, became one record.
+    """
+    fields = [
+        SchemaField(name="company_name", type=FieldType.STRING, required=True),
+        SchemaField(name="email", type=FieldType.EMAIL),
+        SchemaField(name="url", type=FieldType.URL),
+    ]
+    md = (
+        "| company_name | email | url |\n"
+        "| --- | --- | --- |\n"
+        "| Acme One | info@shared.example | https://one.example |\n"
+        "| Acme Two | info@shared.example | https://two.example |\n"
+        "| Acme Three | info@shared.example | https://three.example |\n"
+    )
+    parser = RecordParser(fields)
+    candidates = parser.heuristic_records(md, "https://dir.example/", "Directory")
+    records = parser.ingest(candidates, "https://dir.example/", md)
+    assert len(records) == 3
+
+    # identical rows on a second visit still collapse (full-row equality)
+    again = parser.ingest(candidates, "https://dir.example/", md)
+    assert again == []
+    assert parser.stats.duplicates == 3
+
+
+def test_intent_target_parses_explicit_count():
+    from main import target_from_intent
+
+    assert target_from_intent("Find 20 B2B SaaS startups in the EU") == 20
+    assert target_from_intent("collect 500 leads with emails") == 500
+    assert target_from_intent("scrape 42 records from pricing pages") == 42
+    assert target_from_intent("list companies with SOC 2 reports") is None
+    assert target_from_intent("find 99999 startups") is None  # beyond API cap

@@ -47,9 +47,9 @@ _DEFAULTS: dict[str, Any] = {
     "server": {"host": "127.0.0.1", "port": 8000},
     "paths": {"outputs": "./outputs", "sqlite_db": "./outputs/omnisearch.db"},
     "execution": {
-        "max_records_per_job": 50,
-        "max_pages_per_job": 60,
-        "max_results_per_query": 15,
+        "max_records_per_job": 500,
+        "max_pages_per_job": 900,
+        "max_results_per_query": 25,
         "max_concurrent_scrapes": 6,
         "request_delay_seconds": 0.2,
         "timeout_seconds": 20,
