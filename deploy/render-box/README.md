@@ -21,6 +21,24 @@ Memory footprint measured locally: **~135–170 MB** (limit: 512 MB).
 
 ## Deploy (once, ~10 minutes)
 
+**Automated (preferred):** create a Render API key
+(dashboard → Account Settings → API Keys; owner account so it can
+create services), then:
+
+```bash
+export RENDER_API_KEY=rnd_xxx
+.venv/bin/python scripts/deploy_render_box.py
+```
+
+The script creates the box service (Docker, free), waits for the
+deploy, smoke-tests `/health` + `/searxng/search` + `/v1/search`,
+rewires the app's three `OMNISEARCH_DISCOVERY_*` env vars, redeploys
+the app, and verifies `/api/health` end-to-end. The box API key lives
+in `outputs/box-key.txt` (gitignored; override with
+`RENDER_BOX_API_KEY`).
+
+**Manual (dashboard):**
+
 1. Push this repo to GitHub (Render builds from it).
 2. Render dashboard → **New → Web Service** → connect the repo.
    - Runtime: **Docker**
