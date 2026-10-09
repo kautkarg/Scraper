@@ -1,0 +1,13 @@
+# Keep docker build context small (repo-root context for both the app
+# and deploy/render-box images) — the venv alone is hundreds of MB.
+.venv/
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/
+outputs/
+*.db
+.env
+secrets/
+node_modules/
+web/node_modules/

@@ -15,9 +15,12 @@ execution:
   max_results_per_query: 25
   max_concurrent_scrapes: 6
   request_delay_seconds: 0.2
-  timeout_seconds: 20
+  # Timeout for discovery HTTP calls (crw/SearXNG box). 60s covers a
+  # Render-free cold start (~30-60s spin-up on the first call after idle);
+  # the retry then lands on the already-waking instance.
+  timeout_seconds: 60
   retry_attempts: 2
-  retry_backoff_seconds: 1.5
+  retry_backoff_seconds: 10
   # Status codes treated as "blocked" — logged as a skip, job continues.
   block_status_codes: [401, 403, 429, 503, 999]
   # Domains never worth scraping (parked / pure noise heuristics).

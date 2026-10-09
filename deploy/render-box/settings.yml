@@ -1,0 +1,22 @@
+# Omnisearch Render-box SearXNG settings.
+# Inherits all defaults, then tunes for a keyless datacenter box:
+#  - JSON output format (the app queries /search?format=json)
+#  - no redis -> limiter/cache disabled (only client is the Render app)
+#  - google disabled: datacenter IPs get captcha'd fast; the remaining
+#    engines (bing, duckduckgo, brave, mojeek, startpage, ...) tolerate them.
+use_default_settings: true
+
+server:
+  secret_key: "omnisearch-box-c1a94e7f2b8d5e13"
+  image_proxy: false
+  limiter: false
+
+search:
+  formats: [html, json]
+
+ui:
+  static_use_hash: true
+
+engines:
+  - name: google
+    disabled: true

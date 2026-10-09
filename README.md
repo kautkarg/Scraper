@@ -107,12 +107,19 @@ end-to-end job (`scripts/e2e_llm.py`).
 ## Deploy on Render
 
 ```text
-┌──────────────────────────────┐        ┌─────────────────────────────────┐
-│  Render — Web Service (free) │  HTTP  │  Discovery box (laptop / $5 VPS)│
-│  FastAPI + web UI            │ ─────▶ │  crw serve  +  SearXNG          │
-│  OMNISEARCH_* env vars       │        │  /v1/search · /v1/scrape        │
-└──────────────────────────────┘        └─────────────────────────────────┘
+┌──────────────────────────────┐        ┌─────────────────────────────────────┐
+│  Render — Web Service (free) │  HTTP  │ Discovery box (Render free /        │
+│  FastAPI + web UI            │ ─────▶ │ laptop / $5 VPS)                    │
+│  OMNISEARCH_* env vars       │        │ crw serve + SearXNG behind one port │
+└──────────────────────────────┘        └─────────────────────────────────────┘
 ```
+
+**Cheapest full-cloud setup:** host the box as a second Render *free*
+service — one Dockerfile runs SearXNG + `crw serve` together (~150 MB,
+fits the 512 MB free instance). See
+[`deploy/render-box/README.md`](deploy/render-box/README.md) for the
+click-path; the app only needs the three `OMNISEARCH_DISCOVERY_*` env
+vars pointed at it. The laptop/funnel box remains a working fallback.
 
 The repo ships a [`render.yaml`](render.yaml) blueprint — no dashboard
 twiddling beyond two env vars:
@@ -138,6 +145,7 @@ underscores ignored — parsed as YAML, file < env):
 |---|---|---|
 | `OMNISEARCH_DISCOVERY_SERVER_BASE_URL` | `discovery.server_base_url` | `https://<machine>.<tailnet>.ts.net` |
 | `OMNISEARCH_DISCOVERY_SERVER_API_KEY` | `discovery.server_api_key` | box key (Bearer) |
+| `OMNISEARCH_DISCOVERY_SEARXNG_BASE_URL` | `discovery.searxng_base_url` | `https://<box>.onrender.com/searxng` |
 | `OMNISEARCH_LLM_ENABLED` | `llm.enabled` | `true` / `false` |
 | `OMNISEARCH_LLM_MODE` | `llm.mode` | `openai` / `opencode` |
 | `OMNISEARCH_LLM_BASE_URL` | `llm.base_url` | `https://…ts.net:8443/v1` or provider `/v1` |

@@ -6,3 +6,6 @@ outputs/
 *.db
 .env
 secrets/
+# local-only crw artifacts for offline render-box builds (never commit)
+deploy/render-box/crw
+deploy/render-box/crw-linux-x64.tar.gz
