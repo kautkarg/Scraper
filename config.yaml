@@ -24,10 +24,27 @@ execution:
   # Status codes treated as "blocked" — logged as a skip, job continues.
   block_status_codes: [401, 403, 429, 503, 999]
   # Domains never worth scraping (parked / pure noise heuristics).
+  # Substring-matched against the lowercased URL in two places: the
+  # discovery queue (_dedupe_urls) and the scrape client (block_patterns).
   blocked_domain_patterns:
     - "parked"
     - "domain-sale"
     - "godaddy.com/domainsearch"
+    # Search-engine result pages leaked in via meta-engines (zapmeta,
+    # naver, yahoo) — scraping them yields SERP chrome, never lead data.
+    - "search.yahoo.com"
+    - "startpage.com/do/search"
+    - "google.com/search"          # also news.google.com/search, tbm=isch
+    - "translate.google.com"
+    - "bing.com/search"
+    - "search.brave.com"
+    - "duckduckgo.com/html"
+    - "reddit.com/search"
+    - "x.com/search"
+    - "dailymotion.com/search"
+    - "youtube.com/results"
+    - "youtube.com/watch"          # video pages never yield structured records
+    - "wikipedia.org/w/index.php"  # wiki search pages (articles still allowed)
   user_agent: "OmnisearchBot/1.0 (+local research engine)"
 
 discovery:

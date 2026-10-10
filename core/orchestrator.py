@@ -30,7 +30,7 @@ from core.llm import complete as llm_complete
 from core.llm import extract_json
 from core.config import Config
 from core.exporter import Destination, Exporter
-from core.parser import RecordParser, SchemaField
+from core.parser import RecordParser, SchemaField, is_error_page_title
 
 TERMINAL_STATES = {"completed", "failed"}
 
@@ -351,6 +351,16 @@ class Orchestrator:
                                     f"SKIP {url} — {exc}", "warn")
                         return
                     if stop.is_set():
+                        return
+                    # Interstitial / bot-challenge / error pages are worthless —
+                    # gate BEFORE the LLM path (which would happily extract a
+                    # fake record from "REQUEST DENIED!" pages).
+                    if is_error_page_title(result.title):
+                        skipped.append(SkipInfo(url=url,
+                                                reason=f"error page ({result.title[:60]})"))
+                        self._stage(job_id, "extracting",
+                                    f"SKIP {url} — error page ({result.title[:60]})",
+                                    "warn")
                         return
                     parser.mark_page()
                     scraped_urls.append(result.url)

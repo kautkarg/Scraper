@@ -15,7 +15,7 @@ import core.config as cfg_mod
 from core.config import Config
 from core.exporter import Destination, Exporter
 from core.orchestrator import BUS, JobRequest, Orchestrator
-from core.parser import FieldType, RecordParser, SchemaField, coerce_value
+from core.parser import FieldType, RecordParser, SchemaField, coerce_value, is_error_page_title
 
 FIELDS = [
     SchemaField(name="Company Name", type=FieldType.STRING, required=True),
@@ -567,3 +567,79 @@ def test_intent_target_parses_explicit_count():
     assert target_from_intent("scrape 42 records from pricing pages") == 42
     assert target_from_intent("list companies with SOC 2 reports") is None
     assert target_from_intent("find 99999 startups") is None  # beyond API cap
+
+
+def test_error_page_titles_detected():
+    assert is_error_page_title("REQUEST DENIED!")
+    assert is_error_page_title("Access Denied")
+    assert is_error_page_title("Just a moment...")
+    assert is_error_page_title("403 Forbidden")
+    assert is_error_page_title("Checking your browser")
+    assert not is_error_page_title("Zeta Labs")
+    assert not is_error_page_title("")
+
+
+def test_error_page_title_yields_no_records():
+    """Bot-challenge pages must not produce fake records at all."""
+    fields = [
+        SchemaField(name="company_name", type=FieldType.STRING, required=True),
+        SchemaField(name="email", type=FieldType.EMAIL, required=True),
+    ]
+    parser = RecordParser(fields)
+    candidates = parser.heuristic_records(
+        "REQUEST DENIED!\ninfo@jlaforums.com", "https://jlaforums.com/x",
+        "REQUEST DENIED!")
+    assert candidates == []
+    assert parser.ingest(candidates, "https://jlaforums.com/x") == []
+
+
+def test_org_key_dedupes_same_company_across_pages():
+    """Same mailbox + same website host = one entity, revisited."""
+    parser = RecordParser([
+        SchemaField(name="company_name", type=FieldType.STRING, required=True),
+        SchemaField(name="email", type=FieldType.EMAIL, required=True),
+        SchemaField(name="website", type=FieldType.URL),
+    ])
+    first = parser.ingest([{"company_name": "Columbia Magazine",
+                            "email": "webmaster@ColumbiaMagazine.com",
+                            "website": "https://www.columbiamagazine.com/"}],
+                          "https://www.columbiamagazine.com/index.php?sid=65028")
+    second = parser.ingest([{"company_name": "ColumbiaMagazine.com",
+                             "email": "webmaster@columbiamagazine.com",
+                             "website": "https://www.columbiamagazine.com/"}],
+                           "https://www.columbiamagazine.com/storiesarchive.php")
+    assert len(first) == 1
+    assert second == []
+    assert parser.stats.duplicates == 1
+
+    # different website host -> full-row key, survives
+    third = parser.ingest([{"company_name": "Other Co",
+                            "email": "webmaster@columbiamagazine.com",
+                            "website": "https://other.example/"}],
+                          "https://other.example/")
+    assert len(third) == 1
+
+
+def test_serp_pages_blocked_from_queue():
+    """Search-engine result pages never enter the scrape queue."""
+    from core.config import load_config
+    from core.orchestrator import _dedupe_urls
+    from connectors.fastcrw_client import SearchResult
+
+    cfg = load_config()
+    serp = [
+        "https://us.search.yahoo.com/search?p=nagpur+saas",
+        "https://www.startpage.com/do/search?q=saas",
+        "https://www.google.com/search?q=saas&tbm=isch",
+        "https://news.google.com/search?q=saas",
+        "https://www.reddit.com/search/?q=saas",
+        "https://x.com/search?q=saas",
+        "https://www.youtube.com/results?search_query=saas",
+        "https://en.wikipedia.org/w/index.php?search=Nagpur",
+        "https://translate.google.com/?sl=en&tl=mr",
+        "https://example.com/saas-startups",
+    ]
+    results = [SearchResult(url=u, title="", snippet="", engine="test")
+               for u in serp]
+    kept = _dedupe_urls(results, cfg)
+    assert kept == ["https://example.com/saas-startups"]

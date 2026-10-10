@@ -231,6 +231,8 @@ class RecordParser:
 
     # -- stage 1: raw candidates from markdown (heuristic path) --------------
     def heuristic_records(self, markdown: str, source_url: str, title: str = "") -> list[dict[str, Any]]:
+        if is_error_page_title(title):
+            return []
         candidates: list[dict[str, Any]] = []
 
         table = _split_markdown_table(markdown)
@@ -353,6 +355,15 @@ class RecordParser:
         self.stats.pages += 1
 
     def _record_key(self, values: dict[str, Any]) -> str:
+        # Same-org key first: an email at a company's own domain plus a
+        # website on that domain identifies one entity — revisits across
+        # pages (same mailbox, different titles/URLs) collapse. Directory
+        # rows sharing a generic contact address but listing their OWN
+        # websites (email domain != website host) fall through to the
+        # full-row key, so distinct companies still all survive.
+        org = self._org_key(values)
+        if org:
+            return org
         # Full-row key: only genuinely identical rows collapse. Keying on a
         # single field (email, or the cross-filled source URL) used to wipe
         # out whole batches — e.g. every table row of a directory page
@@ -361,6 +372,24 @@ class RecordParser:
         parts = [str(values.get(f.name) or "").strip().lower()
                  for f in self.fields]
         return "|".join(parts) if any(parts) else "empty"
+
+    def _org_key(self, values: dict[str, Any]) -> str | None:
+        email = next((str(values.get(f.name) or "").strip().lower()
+                      for f in self.fields if f.type is FieldType.EMAIL), "")
+        url = next((str(values.get(f.name) or "").strip()
+                    for f in self.fields if f.type is FieldType.URL), "")
+        if not email or "@" not in email or not url:
+            return None
+        try:
+            host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+        except ValueError:
+            return None
+        if not host or "." not in host:
+            return None
+        domain = email.rsplit("@", 1)[1].lower()
+        if domain == host or domain.endswith("." + host) or host.endswith("." + domain):
+            return f"org|{domain}|{host}"
+        return None
 
     # -- utility ---------------------------------------------------------------
     @staticmethod
@@ -399,6 +428,23 @@ def _parse_json_container(text: str) -> list[dict[str, Any]]:
 def _is_name_field(field: SchemaField) -> bool:
     return norm_key(field.name) in {"name", "company", "companyname", "title", "startup",
                                     "brand", "product", "organization", "org"}
+
+
+# Titles of interstitial / bot-challenge / error pages. Scraping these
+# yields fake records (e.g. "REQUEST DENIED!" rows carrying the site's
+# contact email) — the whole page is worthless, skip it entirely.
+_ERROR_TITLE_RE = re.compile(
+    r"request denied|access denied|attention required|just a moment|"
+    r"checking your browser|are you a robot|verify you are human|captcha|"
+    r"403 forbidden|404 not found|error \d{3}|service unavailable|"
+    r"temporarily (?:unavailable|blocked|limited)|enable javascript|"
+    r"ddos protection|blocked\b",
+    re.IGNORECASE,
+)
+
+
+def is_error_page_title(title: str) -> bool:
+    return bool(title) and bool(_ERROR_TITLE_RE.search(title))
 
 
 # Titles that identify a page type, never an entity — used as company_name
