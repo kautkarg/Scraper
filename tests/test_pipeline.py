@@ -859,6 +859,41 @@ def test_rank_search_results_passthrough_on_thin_intent():
     assert rank_search_results(results, "find leads") == results
 
 
+def test_rank_search_results_drops_site_search_pages():
+    """imgur.com/search?q=… echoes the query in title AND url — every
+    intent token 'matches', so these must be filtered structurally."""
+    from connectors.fastcrw_client import SearchResult
+    from core.orchestrator import rank_search_results
+
+    intent = ("Find 20 B2B SaaS startups in India with active "
+              "hiring pages and founder emails")
+    serp = SearchResult(
+        "B2B SaaS startups in India email database founder contacts",
+        "https://imgur.com/search?q=B2B+SaaS+startups+in+India+email+database+founder+contacts")
+    gem = SearchResult("B2B SaaS Startups - Growthlist",
+                       "https://growthlist.co/b2b-saas-startups")
+    kept = rank_search_results([serp, gem], intent)
+    assert [r.url for r in kept] == [gem.url]
+
+
+def test_rank_search_results_demotes_news_below_directories():
+    """Equal intent hits: a /news/ article sorts after a directory page."""
+    from connectors.fastcrw_client import SearchResult
+    from core.orchestrator import rank_search_results
+
+    intent = ("Find 20 B2B SaaS startups in India with active "
+              "hiring pages and founder emails")
+    news = SearchResult("B2B SaaS startups brace for rough ride in India",
+                        "https://www.moneycontrol.com/news/business/startup/"
+                        "saas-firms-brace-rough-ride-9488151.html")
+    # identical intent-token hit count (b2b, saas, startups, india) — the
+    # desk-hint/news-penalty tiebreaker decides the order
+    directory = SearchResult("B2B SaaS Startup Directory India",
+                             "https://startupdir.example/b2b-saas-startups-india")
+    kept = rank_search_results([news, directory], intent)
+    assert [r.url for r in kept] == [directory.url, news.url]  # news last
+
+
 def test_placeholder_email_rejected():
     """LLM-invented contact addresses must not pass the required gate."""
     fields = [

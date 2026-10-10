@@ -21,6 +21,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from urllib.parse import urlparse
 from typing import Any
 
 from connectors.fastcrw_client import (BlockedError, DiscoveryError, FastCRWClient,
@@ -539,16 +540,28 @@ _DESK_HINTS = re.compile(
     r"(director|database|list[-_ ]of|/list[-_]|top[- ]?\d|contact[-_ ]?list"
     r"|email[-_ ]?list|companies|startups|start-ups)", re.I)
 
+# Site-search result pages (imgur.com/search?q=…) echo the query in BOTH
+# the URL and the SERP title, so every intent token "matches" — they must
+# never count as relevant.
+_SEARCH_PAGE_RE = re.compile(r"^/search[/?]|/search\?(?:[^#]*&)?q=", re.I)
+
+# Hard-news paths publish articles, not contact tables. Demoted (not
+# dropped) — an occasional news page still carries a company list.
+_NEWS_HINTS = re.compile(
+    r"/news(?:letter)?s?/|/articleshow|/story/|/breaking-news/", re.I)
+
 
 def rank_search_results(results: list[SearchResult], intent: str) -> list[SearchResult]:
     """Drop off-topic SERP noise and prioritise directory-like pages.
 
-    A result survives when its title/snippet/url mention at least two of the
+    A result survives when its title/snippet/path mention at least two of the
     intent's content tokens ("History of India" shares only *india* with a
     SaaS-founders intent and is dropped; a "Top SaaS companies in India"
-    page shares *saas* + *india* and stays). Seed URLs always survive.
+    page shares *saas* + *india* and stays). URL query strings are excluded
+    from scoring — they echo search phrases. Seed URLs always survive.
     Survivors are ordered by intent hits, then directory-page hints, then
-    original rank — stable, so equal scores keep SERP order.
+    news penalty, then original rank — stable, so equal scores keep SERP
+    order.
     """
     tokens = {t for t in re.findall(r"[a-z0-9]{3,}", (intent or "").lower())
               if t not in _STOPWORDS}
@@ -560,18 +573,28 @@ def rank_search_results(results: list[SearchResult], intent: str) -> list[Search
         # crude stem: "startups" also matches "startup", "companies"/"company"
         return sum(1 for t in tokens if t in low or (len(t) >= 5 and t[:5] in low))
 
-    scored: list[tuple[int, int, int, SearchResult]] = []
+    scored: list[tuple[int, int, int, int, SearchResult]] = []
     for i, item in enumerate(results):
         if item.engine == "seed":
-            scored.append((-10_000, 0, i, item))  # user-supplied: always first
+            scored.append((-10_000, 0, 0, i, item))  # user-supplied: first
             continue
-        text = f"{item.title} {item.snippet} {item.url}"
+        try:
+            parsed = urlparse(item.url)
+            path = parsed.path or "/"
+        except ValueError:
+            continue
+        # site-search pages: imgur.com/search, example.com/search?q=…
+        if _SEARCH_PAGE_RE.match(path) or (
+                path.rstrip("/").endswith("/search") and parsed.query):
+            continue
+        text = f"{item.title} {item.snippet} {path}"
         score = hits(text)
         if score < 2:
             continue
-        scored.append((-score, -int(bool(_DESK_HINTS.search(text))), i, item))
-    scored.sort(key=lambda row: (row[0], row[1], row[2]))
-    return [row[3] for row in scored]
+        scored.append((-score, -int(bool(_DESK_HINTS.search(text))),
+                       int(bool(_NEWS_HINTS.search(item.url))), i, item))
+    scored.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
+    return [row[4] for row in scored]
 
 
 def _summary(state: JobState, queries: list[str], sources: list[str],
