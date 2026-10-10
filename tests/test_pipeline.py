@@ -1019,6 +1019,18 @@ def test_wave2_lead_treats_placeholder_email_as_lead():
     assert lead == ("https://zetalabs.io", "Zeta Labs")
 
 
+def test_wave2_lead_coerces_bare_domain_website():
+    """LLMs return bare domains without a scheme — coerce_value adds
+    https:// so the wave-2 scraper can fetch it."""
+    from core.orchestrator import _wave2_lead
+
+    lead = _wave2_lead(
+        {"Company Name": "Zeta Labs", "email": "verified@acme.io",
+         "website": "zetalabs.io"},
+        WAVE2_FIELDS, "https://dir.example/india")
+    assert lead == ("https://zetalabs.io", "Zeta Labs")
+
+
 def test_wave2_lead_ignores_the_listing_page_itself():
     """Heuristic URL cross-fill gives the source URL — never re-queue it."""
     from core.orchestrator import _wave2_lead
@@ -1035,8 +1047,6 @@ def test_wave2_lead_requires_both_name_and_website():
                        WAVE2_FIELDS, "https://dir.example/") is None
     assert _wave2_lead({"Company Name": "Zeta Labs"},
                        WAVE2_FIELDS, "https://dir.example/") is None
-    assert _wave2_lead({"Company Name": "Zeta Labs", "website": "zetalabs.io"},
-                       WAVE2_FIELDS, "https://dir.example/") is None  # no scheme
 
 
 def test_emails_in_markdown_prefers_own_domain():

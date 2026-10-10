@@ -423,6 +423,13 @@ class Orchestrator:
             tasks = [asyncio.create_task(worker(u)) for u in urls]
             await asyncio.gather(*tasks)
 
+            # Diagnostic: how many near-miss leads (name + website, no
+            # usable email) did wave 1 collect? Empty dict = the queue
+            # never produced candidates with an off-page website.
+            self._stage(job_id, "extracting",
+                        f"Wave 1 complete: {len(state.records)} records, "
+                        f"{len(wave2)} near-miss leads collected")
+
             # ---- stage 4b: second-wave contact harvest ----------------------
             # Listing pages that gave us name + website but no email get one
             # focused revisit: the company's own homepage, then /contact,
@@ -708,8 +715,10 @@ def _wave2_lead(candidate: dict[str, Any], fields: list[SchemaField],
     if coerce_value(email_f, get(email_f)):
         return None  # complete — nothing to harvest later
     name = str(get(name_f) or "").strip()
-    website = str(get(url_f) or "").strip()
-    if not name or not website or not website.startswith(("http://", "https://")):
+    # LLMs often return bare domains ("zetalabs.io") — coerce adds the
+    # scheme so the wave-2 scraper can fetch it.
+    website = coerce_value(url_f, get(url_f))
+    if not name or not website:
         return None
     if website.rstrip("/") == source_url.rstrip("/"):
         return None  # the listing page itself, not the company's site
