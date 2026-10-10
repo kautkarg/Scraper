@@ -33,8 +33,8 @@ from core.llm import extract_json
 from core.config import Config
 from core.exporter import Destination, Exporter
 from core.parser import (FieldType, RecordParser, SchemaField,
-                         emails_in_markdown, is_error_page_title,
-                         norm_key, _is_name_field)
+                         coerce_value, emails_in_markdown,
+                         is_error_page_title, norm_key, _is_name_field)
 
 TERMINAL_STATES = {"completed", "failed"}
 
@@ -702,8 +702,11 @@ def _wave2_lead(candidate: dict[str, Any], fields: list[SchemaField],
                 return value
         return None
 
-    if get(email_f):  # complete — nothing to harvest later
-        return None
+    # Coerce, don't just check non-emptiness: an LLM-invented placeholder
+    # ("verified@acme.io") is truthy but filters to None in _to_email, so
+    # validate() rejects the record — the company is still a lead.
+    if coerce_value(email_f, get(email_f)):
+        return None  # complete — nothing to harvest later
     name = str(get(name_f) or "").strip()
     website = str(get(url_f) or "").strip()
     if not name or not website or not website.startswith(("http://", "https://")):
