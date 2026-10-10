@@ -45,6 +45,17 @@ execution:
     - "youtube.com/results"
     - "youtube.com/watch"          # video pages never yield structured records
     - "wikipedia.org/w/index.php"  # wiki search pages (articles still allowed)
+    # Social/feed/article surfaces — queued by the planner but never contain
+    # company + email rows; each one costs a scrape slot and an LLM call.
+    - "linkedin.com/pulse"
+    - "linkedin.com/posts"
+    - "linkedin.com/feed"
+    - "medium.com/tag/"            # tag archives are unrelated-article lists
+    - "pinterest.com/search"
+    - "ecosia.org/search"          # SERP leaked via zapmeta/naver mirrors
+    - "search.naver.com"
+    - "news.crunchbase.com"        # news posts, not company profiles
+    - "britannica.com"             # 403 + encyclopedia articles
   user_agent: "OmnisearchBot/1.0 (+local research engine)"
 
 discovery:

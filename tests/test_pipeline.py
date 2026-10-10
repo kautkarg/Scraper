@@ -718,3 +718,83 @@ def test_best_name_prefers_domain_over_slogan_title():
         "AI-Driven Digital Marketing Agency for Online Visibility",
         "Contact us at info@seovillas.com", "https://seovillas.com/")
     assert name == "Seovillas"
+
+
+# --------------------------------------------------------------------------
+# crash hardening — one bad URL / one odd exception must never kill a job
+# --------------------------------------------------------------------------
+
+async def test_httpx_timeout_surfaces_as_scrape_error(config):
+    """httpx timeouts have str() == '' — must become a ScrapeError, not escape."""
+    import httpx
+
+    from connectors.fastcrw_client import FastCRWClient, ScrapeError
+
+    client = FastCRWClient(config)
+    client._detected = True
+    client.report.http_fallback = True
+
+    async def timed_out(*args, **kwargs):
+        raise httpx.ConnectTimeout("")  # exactly what httpx raises in production
+
+    client._http.get = timed_out
+    try:
+        with pytest.raises(ScrapeError) as excinfo:
+            await client.scrape("https://example.com/slow-page")
+    finally:
+        await client.aclose()
+    msg = str(excinfo.value)
+    assert "ConnectTimeout" in msg and "slow-page" in msg
+    assert msg.strip()  # never blank
+
+
+async def test_worker_survives_unexpected_exception(config, fixture_server, monkeypatch):
+    """A non-ScrapeError from one URL is skipped; the job still completes."""
+    from connectors.fastcrw_client import FastCRWClient
+
+    real_scrape = FastCRWClient.scrape
+
+    async def flaky(self, url):
+        if "/about" in url:
+            raise ValueError("")  # empty str — used to abort the whole job
+        return await real_scrape(self, url)
+
+    monkeypatch.setattr(FastCRWClient, "scrape", flaky)
+    request = JobRequest(
+        intent="Find B2B SaaS startups in India with founder emails",
+        fields=FIELDS, destination=Destination.CSV, max_records=10,
+        seed_urls=[f"{fixture_server}/directory", f"{fixture_server}/about"],
+    )
+    state = BUS.create(request)
+    await Orchestrator(config).run(state)
+
+    summary = state.summary or {}
+    assert state.status.value == "completed", summary.get("error")
+    assert summary["records_exported"] == 3
+    skipped_urls = [s["url"] for s in summary["skipped"]]
+    assert any("/about" in u for u in skipped_urls)
+
+
+async def test_unexpected_error_message_is_never_empty(config, fixture_server,
+                                                       monkeypatch):
+    """The generic handler must name the exception type even when str() is ''."""
+    from core.orchestrator import Orchestrator
+
+    async def boom(self, state, headers):
+        raise ValueError("")  # str(exc) == ''
+
+    monkeypatch.setattr(Orchestrator, "_export", boom)
+    request = JobRequest(
+        intent="Find startups with emails",
+        fields=[SchemaField(name="email", type=FieldType.EMAIL, required=True)],
+        destination=Destination.JSON, max_records=10,
+        seed_urls=[f"{fixture_server}/directory"],
+    )
+    state = BUS.create(request)
+    await Orchestrator(config).run(state)
+
+    summary = state.summary or {}
+    assert state.status.value == "failed"
+    error = summary.get("error", "")
+    assert error.startswith("unexpected error: ValueError")
+    assert error != "unexpected error: "  # the old blank-message bug

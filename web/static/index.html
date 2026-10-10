@@ -540,6 +540,17 @@ async function refreshHealth() {
 }
 
 /* ---------- run ---------- */
+// Mirrors target_from_intent() in main.py: an explicit count in the intent
+// ("find 20 …") wins when the max-records field is left blank.
+function intentTarget(text) {
+  const m = /\b(?:find|get|collect|extract|scrape|build|list|gather)\s+(\d{1,4})\b/i
+    .exec(text) || /(\d{1,4})\s*(?:records|rows|results|companies|startups|leads|entries|contacts)\b/i
+    .exec(text);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return n >= 1 && n <= 2000 ? n : null;
+}
+
 async function run() {
   if (running) return;
   const intent = $("intent").value.trim();
@@ -549,7 +560,12 @@ async function run() {
 
   resetRun();
   running = true;
-  targetRecords = Math.min(2000, Math.max(1, parseInt($("maxRecords").value, 10) || 500));
+  const rawMax = $("maxRecords").value.trim();
+  // null => let the backend derive the cap from the intent, never a blind 500.
+  const maxRecords = rawMax === ""
+    ? intentTarget(intent)
+    : Math.min(2000, Math.max(1, parseInt(rawMax, 10) || 500));
+  targetRecords = maxRecords || 500;
   $("mRecords").textContent = `0/${targetRecords}`;
   const btn = $("runBtn");
   btn.classList.add("running"); btn.disabled = true;
@@ -557,12 +573,13 @@ async function run() {
   $("liveFlag").classList.add("on");
   $("progress").classList.add("busy");
   $("jobStatus").textContent = "queued";
-  log(`Submitting job — ${fields.length} fields, destination=${$("destination").value}`);
+  log(`Submitting job — ${fields.length} fields, destination=${$("destination").value}`
+      + (maxRecords ? `, max ${maxRecords} records` : ", max from intent"));
 
   const body = {
     intent, fields,
     destination: $("destination").value,
-    max_records: targetRecords,
+    max_records: maxRecords,
     seed_urls: $("seedUrls").value.split(/\s+/).filter(Boolean),
     table_name: $("tableName").value.trim() || "records",
     webhook_url: $("hookUrl").value.trim(),

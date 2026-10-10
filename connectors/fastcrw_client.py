@@ -447,6 +447,7 @@ class FastCRWClient:
         last_error: Exception | None = None
         for engine in engines:
             for attempt in range(attempts):
+                failed: Exception | None = None
                 try:
                     if engine is EngineKind.CLI:
                         return await self._scrape_cli(url)
@@ -456,13 +457,19 @@ class FastCRWClient:
                 except BlockedError:
                     raise  # the target refused us — every engine would too
                 except ScrapeError as exc:
-                    last_error = exc
-                    if attempt < attempts - 1:
-                        await asyncio.sleep(self.backoff * (attempt + 1))
-                    else:
-                        self.log("warn", f"engine {engine.value} failed for {url}: {exc} "
-                                         f"— trying next engine")
-                        break
+                    failed = exc
+                except Exception as exc:  # noqa: BLE001 — httpx timeouts raise with
+                    # str() == '' (ConnectTimeout/ReadTimeout), which used to escape
+                    # here and fail the whole job with an empty "unexpected error:".
+                    failed = ScrapeError(
+                        f"{type(exc).__name__} scraping {url}: {exc or 'no detail'}")
+                last_error = failed
+                if attempt < attempts - 1:
+                    await asyncio.sleep(self.backoff * (attempt + 1))
+                else:
+                    self.log("warn", f"engine {engine.value} failed for {url}: "
+                                     f"{failed} — trying next engine")
+                    break
         raise last_error or ScrapeError(f"failed to scrape {url}")
 
     def _is_blocked_domain(self, url: str) -> bool:

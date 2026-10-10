@@ -16,6 +16,7 @@ import asyncio
 import json
 import re
 import time
+import traceback
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -195,6 +196,12 @@ async def llm_queries(config: Config, intent: str, fields: list[SchemaField],
         "You are a search-query planner for a data harvesting engine. "
         "Given a user intent and target schema, produce 6-10 diverse web search "
         "queries that would surface pages containing those fields. "
+        "Prefer directory/list/database pages that publish many entries with "
+        "contact details (e.g. 'X directory', 'list of X with email', "
+        "'top X companies contact list'). "
+        "Never target news articles, blog posts, social feed URLs (LinkedIn "
+        "posts/pulse, Medium, X/Twitter), videos, or encyclopedias — they never "
+        "contain structured records. Do not use site: operators on those hosts. "
         'Respond with JSON only: {"queries": ["..."]}\n\n'
         f"Intent: {intent}\nSchema: {schema_hint}"
     )
@@ -338,50 +345,60 @@ class Orchestrator:
                     if stop.is_set():
                         return
                     try:
-                        result = await client.scrape(url)
+                        await _harvest_one(url)
                     except BlockedError as exc:
                         skipped.append(SkipInfo(url=exc.url,
                                                 reason=f"blocked ({exc.reason})"))
                         self._stage(job_id, "extracting",
                                     f"SKIP {url} — {exc.reason}", "warn")
-                        return
                     except ScrapeError as exc:
                         skipped.append(SkipInfo(url=url, reason=str(exc)[:200]))
                         self._stage(job_id, "extracting",
                                     f"SKIP {url} — {exc}", "warn")
-                        return
-                    if stop.is_set():
-                        return
-                    # Interstitial / bot-challenge / error pages are worthless —
-                    # gate BEFORE the LLM path (which would happily extract a
-                    # fake record from "REQUEST DENIED!" pages).
-                    if is_error_page_title(result.title):
-                        skipped.append(SkipInfo(url=url,
-                                                reason=f"error page ({result.title[:60]})"))
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 — a single odd URL (LLM,
+                        # parser, transport edge cases) must never abort the job
+                        skipped.append(SkipInfo(
+                            url=url,
+                            reason=f"{type(exc).__name__}: {exc}"[:200]))
                         self._stage(job_id, "extracting",
-                                    f"SKIP {url} — error page ({result.title[:60]})",
-                                    "warn")
-                        return
-                    parser.mark_page()
-                    scraped_urls.append(result.url)
+                                    f"SKIP {url} — {type(exc).__name__}: {exc}", "warn")
+
+            async def _harvest_one(url: str) -> None:
+                result = await client.scrape(url)
+                if stop.is_set():
+                    return
+                # Interstitial / bot-challenge / error pages are worthless —
+                # gate BEFORE the LLM path (which would happily extract a
+                # fake record from "REQUEST DENIED!" pages).
+                if is_error_page_title(result.title):
+                    skipped.append(SkipInfo(url=url,
+                                            reason=f"error page ({result.title[:60]})"))
                     self._stage(job_id, "extracting",
-                                f"scraped {result.url} [{result.engine}, {result.elapsed_ms}ms]"
-                                f" — {len(state.records)}/{max_records} records")
-                    llm = await llm_records(self.config, result.markdown, result.url,
-                                            request.fields)
-                    candidates_records = llm if llm is not None else parser.heuristic_records(
-                        result.markdown, result.url, result.title)
-                    fresh = parser.ingest(candidates_records, result.url,
-                                          result.markdown)
-                    for record in fresh:
-                        if len(state.records) >= max_records:
-                            stop.set()
-                            return
-                        state.records.append(record)
-                        self._record(job_id, record)
+                                f"SKIP {url} — error page ({result.title[:60]})",
+                                "warn")
+                    return
+                parser.mark_page()
+                scraped_urls.append(result.url)
+                self._stage(job_id, "extracting",
+                            f"scraped {result.url} [{result.engine}, {result.elapsed_ms}ms]"
+                            f" — {len(state.records)}/{max_records} records")
+                llm = await llm_records(self.config, result.markdown, result.url,
+                                        request.fields)
+                candidates_records = llm if llm is not None else parser.heuristic_records(
+                    result.markdown, result.url, result.title)
+                fresh = parser.ingest(candidates_records, result.url,
+                                      result.markdown)
+                for record in fresh:
                     if len(state.records) >= max_records:
                         stop.set()
-                    await asyncio.sleep(delay)
+                        return
+                    state.records.append(record)
+                    self._record(job_id, record)
+                if len(state.records) >= max_records:
+                    stop.set()
+                await asyncio.sleep(delay)
 
             tasks = [asyncio.create_task(worker(u)) for u in urls]
             await asyncio.gather(*tasks)
@@ -419,14 +436,19 @@ class Orchestrator:
             self._finish(state, JobStatus.COMPLETED, summary)
 
         except (DiscoveryError, RuntimeError) as exc:
-            message = str(exc)
+            message = str(exc) or f"{type(exc).__name__} (no detail)"
             self.bus.publish(job_id, {"type": "error", "message": message})
             self._stage(job_id, "failed", message, "error")
             self._finish(state, JobStatus.FAILED,
                          _summary(state, queries, scraped_urls, [], skipped,
                                   notes, t0, error=message))
         except Exception as exc:  # noqa: BLE001 — never leave a job hanging
-            message = f"unexpected error: {exc}"
+            # str(exc) can be '' (httpx timeouts) — include the type so the
+            # failure is never blank, and dump the traceback to stdout so the
+            # Render log carries the real cause.
+            detail = str(exc) or repr(exc)
+            message = f"unexpected error: {type(exc).__name__}: {detail}"
+            traceback.print_exc()
             self.bus.publish(job_id, {"type": "error", "message": message})
             self._stage(job_id, "failed", message, "error")
             self._finish(state, JobStatus.FAILED,
