@@ -17,6 +17,19 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field, field_validator
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+# Placeholder addresses LLMs invent when the page shows no real contact
+# (seen live: "verified@acme.io" on a job that never found the company).
+_PLACEHOLDER_EMAIL_DOMAINS = frozenset({
+    "example.com", "example.org", "example.net",
+    "test.com", "domain.com", "company.com", "yourcompany.com",
+    "yourdomain.com", "sample.com", "placeholder.com", "localhost",
+})
+_PLACEHOLDER_EMAIL_LOCALS = frozenset({
+    "verified", "test", "example", "sample", "placeholder", "yourname",
+    "firstname", "lastname", "username", "user", "email", "name",
+    "johndoe", "janedoe", "test1",
+})
 URL_RE = re.compile(r"https?://[^\s)\]>]+")
 URL_LIKE_RE = re.compile(r"^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/[^\s]*)?$", re.I)
 MARKDOWN_LINK_RE = re.compile(r"\[([^\]]*)\]\((https?://[^)]+)\)")
@@ -76,7 +89,14 @@ class ParsedRecord(BaseModel):
 
 def _to_email(value: Any) -> str | None:
     match = EMAIL_RE.search(str(value))
-    return match.group(0).lower() if match else None
+    if not match:
+        return None
+    email = match.group(0).lower()
+    local, _, domain = email.partition("@")
+    # LLM/hallucination placeholders — never a real contact address.
+    if domain in _PLACEHOLDER_EMAIL_DOMAINS or local in _PLACEHOLDER_EMAIL_LOCALS:
+        return None
+    return email
 
 
 def _to_url(value: Any, source_text: str = "") -> str | None:
@@ -580,6 +600,12 @@ _SLOGAN_RE = re.compile(
     r"about|list of|search|discover|why|how|what)\b",
     re.IGNORECASE,
 )
+# …and truncated ones: a name that ENDS on a slogan adjective is the tail
+# of a tagline ("India's Leading" from "India's Leading Software Company").
+_SLOGAN_TAIL_RE = re.compile(
+    r"\b(?:leading|trusted|award[- ]winning|premium|fastest|growing)\.?$",
+    re.IGNORECASE,
+)
 _EMOJI_RE = re.compile(
     "[\U0001F000-\U0001FAFF☀-➿⬀-⯿️]")
 
@@ -613,6 +639,8 @@ def _looks_like_org_name(name: str) -> bool:
     if len(words) > 6:
         return False
     if _SLOGAN_RE.match(s) and len(words) > 2:
+        return False
+    if _SLOGAN_TAIL_RE.search(s):
         return False
     # Prose markers: phrases that never occur in org names.
     low = f" {s.lower()} "

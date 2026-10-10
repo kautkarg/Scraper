@@ -798,3 +798,88 @@ async def test_unexpected_error_message_is_never_empty(config, fixture_server,
     error = summary.get("error", "")
     assert error.startswith("unexpected error: ValueError")
     assert error != "unexpected error: "  # the old blank-message bug
+
+
+# --------------------------------------------------------------------------
+# yield: relevance-ranked queue (the india run scraped 85 pages at 1% validity
+# because SERP noise — Wikipedia articles, list-maker apps — outranked
+# directory pages in the scrape queue)
+# --------------------------------------------------------------------------
+
+def test_rank_search_results_drops_offtopic_serp_noise():
+    from connectors.fastcrw_client import SearchResult
+    from core.orchestrator import rank_search_results
+
+    intent = ("Find 20 B2B SaaS startups in India with active "
+              "hiring pages and founder emails")
+    junk = [
+        SearchResult("History of India - Wikipedia",
+                     "https://en.wikipedia.org/wiki/History_of_India"),
+        SearchResult("India - Simple English Wikipedia",
+                     "https://simple.wikipedia.org/wiki/India"),
+        SearchResult("List Maker: To-do list app",
+                     "https://listmaker.com/to-do"),
+        SearchResult("ISO US? | craigslist",
+                     "https://geo.craigslist.org/iso/us"),
+        SearchResult("Maps of India",
+                     "https://www.worldatlas.com/maps/india"),
+    ]
+    gems = [
+        SearchResult("Top SaaS Companies in India (2026)",
+                     "https://softwaresuggest.com/blog/top-saas-companies-in-india",
+                     snippet="B2B SaaS startups list with contact emails"),
+        SearchResult("B2B SaaS Startups - Growthlist",
+                     "https://growthlist.co/b2b-saas-startups",
+                     snippet="India SaaS startup database"),
+    ]
+    kept = rank_search_results(junk + gems, intent)
+    urls = [r.url for r in kept]
+    assert urls == [gems[0].url, gems[1].url]  # kept AND desk-hint ordered
+
+
+def test_rank_search_results_seed_urls_always_survive():
+    from connectors.fastcrw_client import SearchResult
+    from core.orchestrator import rank_search_results
+
+    intent = ("Find 20 B2B SaaS startups in India with active "
+              "hiring pages and founder emails")
+    seed = SearchResult("seed", "https://only.example/page", engine="seed")
+    noise = SearchResult("History of India",
+                         "https://en.wikipedia.org/wiki/History_of_India")
+    kept = rank_search_results([noise, seed], intent)
+    assert [r.url for r in kept] == ["https://only.example/page"]
+
+
+def test_rank_search_results_passthrough_on_thin_intent():
+    """With <3 content tokens there is not enough signal to judge relevance."""
+    from connectors.fastcrw_client import SearchResult
+    from core.orchestrator import rank_search_results
+
+    results = [SearchResult("Anything", "https://whatever.example/")]
+    assert rank_search_results(results, "find leads") == results
+
+
+def test_placeholder_email_rejected():
+    """LLM-invented contact addresses must not pass the required gate."""
+    fields = [
+        SchemaField(name="Company Name", type=FieldType.STRING, required=True),
+        SchemaField(name="email", type=FieldType.EMAIL, required=True),
+    ]
+    parser = RecordParser(fields)
+    accepted = parser.ingest(
+        [{"Company Name": "Ghost Inc", "email": "verified@acme.io"},
+         {"Company Name": "Real Co", "email": "info@webzpapa.com"}],
+        "https://dir.example/")
+    assert [r["company_name"] for r in accepted] == ["Real Co"]
+    assert parser.stats.invalid == 1
+
+
+def test_slogan_tail_name_not_accepted():
+    """'India's Leading' is the truncated tail of a marketing tagline."""
+    from core.parser import _looks_like_org_name
+
+    assert not _looks_like_org_name("India's Leading")
+    assert not _looks_like_org_name("Award Winning")
+    # 2-word openers still survive the start-of-name slogan rule ("Best Buy")
+    assert _looks_like_org_name("Best Buy")
+    assert _looks_like_org_name("Zeta Labs")

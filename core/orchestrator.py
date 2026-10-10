@@ -320,6 +320,13 @@ class Orchestrator:
                     self._stage(job_id, "discovering", f"Query skipped: {exc}", "warn")
                 await asyncio.sleep(self.config.get("execution.request_delay_seconds", 0.2))
 
+            before_rank = len(candidates)
+            candidates = rank_search_results(candidates, request.intent)
+            if len(candidates) < before_rank:
+                self._stage(job_id, "discovering",
+                            f"intent filter: {before_rank} results -> "
+                            f"{len(candidates)} on-topic")
+
             urls = _dedupe_urls(candidates, self.config)
             if not urls:
                 reason = discovery_failed or (
@@ -523,6 +530,48 @@ def _dedupe_urls(results: list[SearchResult], config: Config) -> list[str]:
         seen.add(url)
         out.append(url)
     return out
+
+
+# Pages that actually publish lead tables: directories, databases, "top N"
+# listicles, contact/email lists. Scraped first so records land early and a
+# run can stop at max_records before burning the queue on article pages.
+_DESK_HINTS = re.compile(
+    r"(director|database|list[-_ ]of|/list[-_]|top[- ]?\d|contact[-_ ]?list"
+    r"|email[-_ ]?list|companies|startups|start-ups)", re.I)
+
+
+def rank_search_results(results: list[SearchResult], intent: str) -> list[SearchResult]:
+    """Drop off-topic SERP noise and prioritise directory-like pages.
+
+    A result survives when its title/snippet/url mention at least two of the
+    intent's content tokens ("History of India" shares only *india* with a
+    SaaS-founders intent and is dropped; a "Top SaaS companies in India"
+    page shares *saas* + *india* and stays). Seed URLs always survive.
+    Survivors are ordered by intent hits, then directory-page hints, then
+    original rank — stable, so equal scores keep SERP order.
+    """
+    tokens = {t for t in re.findall(r"[a-z0-9]{3,}", (intent or "").lower())
+              if t not in _STOPWORDS}
+    if len(tokens) < 3:
+        return list(results)  # too little signal to judge relevance
+
+    def hits(text: str) -> int:
+        low = text.lower()
+        # crude stem: "startups" also matches "startup", "companies"/"company"
+        return sum(1 for t in tokens if t in low or (len(t) >= 5 and t[:5] in low))
+
+    scored: list[tuple[int, int, int, SearchResult]] = []
+    for i, item in enumerate(results):
+        if item.engine == "seed":
+            scored.append((-10_000, 0, i, item))  # user-supplied: always first
+            continue
+        text = f"{item.title} {item.snippet} {item.url}"
+        score = hits(text)
+        if score < 2:
+            continue
+        scored.append((-score, -int(bool(_DESK_HINTS.search(text))), i, item))
+    scored.sort(key=lambda row: (row[0], row[1], row[2]))
+    return [row[3] for row in scored]
 
 
 def _summary(state: JobState, queries: list[str], sources: list[str],
