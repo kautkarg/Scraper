@@ -643,3 +643,78 @@ def test_serp_pages_blocked_from_queue():
                for u in serp]
     kept = _dedupe_urls(results, cfg)
     assert kept == ["https://example.com/saas-startups"]
+
+
+def test_org_name_shape_gate():
+    """SEO taglines / article headlines are rejected as entity names."""
+    from core.parser import _looks_like_org_name
+
+    # real org names pass
+    assert _looks_like_org_name("Flairlytics")
+    assert _looks_like_org_name("DealIntra Infotech Pvt. Ltd.")
+    assert _looks_like_org_name("Micropro Software Solutions Limited")
+    assert _looks_like_org_name("Zeta Labs")
+
+    # taglines, slogans, article headlines fail
+    assert not _looks_like_org_name(
+        "Leading Digital Marketing & Software Company in Nagpur,India")
+    assert not _looks_like_org_name(
+        "Best Mobile App & Website Development Company in India")
+    assert not _looks_like_org_name(
+        "A Digital Marketing Company for all your Digital Needs!")
+    assert not _looks_like_org_name("Search list of Nagpur Companies")
+    assert not _looks_like_org_name("Nagpur: The Emerging Economic Hub of India")
+    assert not _looks_like_org_name("📰 EarEase Tech – Job Pulse | India IT Edition")
+    assert not _looks_like_org_name("전세계 Top 140개 B2B/SaaS 스타트업들은 누구인가")
+    assert not _looks_like_org_name("")
+
+
+def test_validate_replaces_tagline_name_with_email_domain():
+    parser = RecordParser(FIELDS)
+    records = parser.ingest([{
+        "company_name": "Best Mobile App & Website Development Company in India",
+        "email": "hr@pixelvalues.com",
+    }], "https://pixelvalues.com/")
+    assert len(records) == 1
+    assert records[0]["company_name"] == "Pixelvalues"
+
+
+def test_validate_derives_missing_name_from_email_domain():
+    """A required name field is filled from the record's own identity."""
+    fields = [
+        SchemaField(name="company_name", type=FieldType.STRING, required=True),
+        SchemaField(name="email", type=FieldType.EMAIL, required=True),
+    ]
+    parser = RecordParser(fields)
+    records = parser.ingest([{"email": "sales@microproindia.com"}],
+                            "https://www.linkedin.com/company/micropro")
+    assert len(records) == 1, parser.stats
+    assert records[0]["company_name"] == "Microproindia"
+
+
+def test_validate_skips_freemail_and_platform_hosts_for_name():
+    """gmail.com / linkedin.com tell us nothing — keep the original name."""
+    fields = [
+        SchemaField(name="company_name", type=FieldType.STRING, required=True),
+        SchemaField(name="email", type=FieldType.EMAIL, required=True),
+    ]
+    parser = RecordParser(fields)
+    # freemail + platform URL: no domain identity to derive from
+    records = parser.ingest([{"company_name": "Handset Solutions",
+                              "email": "deals@gmail.com"}],
+                            "https://www.linkedin.com/company/handset")
+    assert records[0]["company_name"] == "Handset Solutions"
+
+    # no name at all, freemail + platform host -> stays invalid (no invention)
+    bad = parser.ingest([{"email": "x@yahoo.co.in"}],
+                        "https://www.linkedin.com/company/x")
+    assert bad == []
+
+
+def test_best_name_prefers_domain_over_slogan_title():
+    from core.parser import _best_name
+
+    name = _best_name(
+        "AI-Driven Digital Marketing Agency for Online Visibility",
+        "Contact us at info@seovillas.com", "https://seovillas.com/")
+    assert name == "Seovillas"

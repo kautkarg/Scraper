@@ -329,7 +329,60 @@ class RecordParser:
                 if field.required:
                     errors.append(f"{field.name}: missing")
             values[field.name] = value
+        self._normalize_name(values, errors, source_url)
         return ParsedRecord(values=values, source_url=source_url, errors=errors)
+
+    def _normalize_name(self, values: dict[str, Any], errors: list[str],
+                        source_url: str) -> None:
+        """Replace a missing or non-org-shaped name with a derived one.
+
+        Page <title>s are SEO taglines ("Best Mobile App & Website
+        Development Company in India"), article headlines, or slogans —
+        never the legal entity. When the extracted name fails
+        _looks_like_org_name (or is absent), derive one from the record's
+        own contact identity: the email domain first (skip freemail),
+        then the website host (skip platforms like linkedin.com where the
+        host tells us nothing), then the source URL host. Keeps the
+        original only when no better source exists — a tagged name beats
+        an empty required field.
+        """
+        field = next((f for f in self.fields if _is_name_field(f)), None)
+        if field is None:
+            return
+        current = values.get(field.name)
+        if current is not None and _looks_like_org_name(str(current)):
+            return
+        derived = self._derive_name(values, source_url)
+        if derived:
+            values[field.name] = derived
+            missing = f"{field.name}: missing"
+            if missing in errors:
+                errors.remove(missing)
+
+    def _derive_name(self, values: dict[str, Any], source_url: str) -> str | None:
+        email = next((str(values.get(f.name) or "").strip().lower()
+                      for f in self.fields if f.type is FieldType.EMAIL), "")
+        if email and "@" in email:
+            domain = email.rsplit("@", 1)[1]
+            if not _is_freemail(domain):
+                name = _name_from_host(domain)
+                if name:
+                    return name
+        url = next((str(values.get(f.name) or "").strip()
+                    for f in self.fields if f.type is FieldType.URL), "")
+        for candidate in (url, source_url):
+            if not candidate:
+                continue
+            try:
+                host = (urlparse(candidate).hostname or "").lower()
+            except ValueError:
+                continue
+            if _registrable_host(host) in _PLATFORM_HOSTS:
+                continue
+            name = _name_from_host(host)
+            if name:
+                return name
+        return None
 
     def ingest(self, candidates: Iterable[dict[str, Any]], source_url: str,
                source_text: str = "") -> list[dict[str, Any]]:
@@ -462,7 +515,8 @@ def _best_name(title: str, markdown: str, source_url: str) -> str | None:
     """Best entity-name guess: usable title, else first heading, else domain stem."""
     for candidate in (title.strip(), _first_heading(markdown) or ""):
         cleaned = re.sub(r"\s*[|\-–—·•]\s*$", "", candidate).strip()
-        if cleaned and cleaned.lower().rstrip("!") not in _GENERIC_TITLES:
+        if cleaned and cleaned.lower().rstrip("!") not in _GENERIC_TITLES \
+                and _looks_like_org_name(cleaned):
             return cleaned
     return _name_from_url(source_url)
 
@@ -472,12 +526,101 @@ def _name_from_url(url: str) -> str | None:
         host = (urlparse(url).hostname or "").lower().removeprefix("www.")
     except ValueError:
         return None
+    return _name_from_host(host)
+
+
+def _name_from_host(host: str) -> str | None:
+    host = (host or "").lower().removeprefix("www.")
     if not host or "." not in host:
         return None
     stem = host.split(".")[0]
     if not stem or stem.isdigit() or len(stem) < 3:
         return None
     return stem[0].upper() + stem[1:]
+
+
+_FREE_MAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "yahoo.com", "hotmail.com", "outlook.com",
+    "live.com", "msn.com", "aol.com", "icloud.com", "me.com", "proton.me",
+    "protonmail.com", "zoho.com", "gmx.com", "gmx.de", "yandex.com",
+    "yandex.ru", "mail.com", "mail.ru", "rediffmail.com", "inbox.com",
+})
+
+# First labels of freemail hosts that use country subdomains
+# (yahoo.co.in, gmail.com.br, …) where the registrable host differs.
+_FREE_MAIL_STEMS = frozenset({
+    "gmail", "googlemail", "yahoo", "hotmail", "outlook", "live", "msn",
+    "aol", "icloud", "me", "proton", "protonmail", "zoho", "gmx", "yandex",
+    "rediffmail", "mail", "inbox",
+})
+
+
+def _is_freemail(domain: str) -> bool:
+    if not domain:
+        return False
+    return (domain in _FREE_MAIL_DOMAINS
+            or _registrable_host(domain) in _FREE_MAIL_DOMAINS
+            or domain.split(".")[0] in _FREE_MAIL_STEMS)
+
+# Hosts that identify a platform, not the entity on the page.
+_PLATFORM_HOSTS = frozenset({
+    "linkedin.com", "facebook.com", "twitter.com", "x.com", "instagram.com",
+    "youtube.com", "github.com", "wikipedia.org", "medium.com", "substack.com",
+})
+
+
+def _registrable_host(host: str) -> str:
+    parts = (host or "").lower().removeprefix("www.").split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else ""
+
+
+# Sentence-y / slogan shapes that never describe a legal entity.
+_SLOGAN_RE = re.compile(
+    r"^(?:best|leading|top|trusted|award[- ]winning|your|get|find|we are|"
+    r"about|list of|search|discover|why|how|what)\b",
+    re.IGNORECASE,
+)
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF☀-➿⬀-⯿️]")
+
+
+def _looks_like_org_name(name: str) -> bool:
+    """False for taglines, article headlines, and slogans used as names.
+
+    Heuristics (tuned against real junk from the Nagpur run):
+      - >6 words or >60 chars → descriptive sentence, not an org name
+        ("Leading Digital Marketing & Software Company in Nagpur,India")
+      - ends in '!' / contains '?' → marketing copy
+      - leading emoji / non-Latin script → article titles ("📰 EarEase…",
+        Korean blog headlines); real orgs in listings are Latin here
+      - slogan openers ("Best ", "Top ", "List of ") — only when the name
+        is 3+ words, so "Best Buy" survives but "Best Mobile App & …"
+        does not
+      - prose markers that never occur in org names
+    """
+    s = name.strip()
+    if not s or len(s) > 60:
+        return False
+    if _EMOJI_RE.search(s):
+        return False
+    if s.endswith("!") or "?" in s:
+        return False
+    # Non-Latin scripts (CJK, Hangul, Arabic, Cyrillic…) appearing in the
+    # name slot came from foreign article titles, not company records.
+    if re.search(r"[Ѐ-ӿ؀-ۿ぀-ヿ一-鿿가-힯]", s):
+        return False
+    words = s.split()
+    if len(words) > 6:
+        return False
+    if _SLOGAN_RE.match(s) and len(words) > 2:
+        return False
+    # Prose markers: phrases that never occur in org names.
+    low = f" {s.lower()} "
+    for marker in (" for all ", " your digital ", " needs ", " we help ",
+                   " the emerging ", " of india", ",india", " in nagpur"):
+        if marker in low:
+            return False
+    return True
 
 
 def _first_heading(markdown: str) -> str | None:
