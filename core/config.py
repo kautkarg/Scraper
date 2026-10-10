@@ -58,6 +58,11 @@ _DEFAULTS: dict[str, Any] = {
         "block_status_codes": [401, 403, 429, 503, 999],
         "blocked_domain_patterns": [],
         "user_agent": "OmnisearchBot/1.0 (+local research engine)",
+        # Second-wave contact harvest: company sites collected during wave 1
+        # (name + website, but no email on the listing page) get a focused
+        # revisit — homepage, then /contact — looking only for an email.
+        "wave2_enabled": True,
+        "wave2_max_pages": 30,
     },
     "discovery": {
         "mode": "auto",

@@ -32,7 +32,9 @@ from core.llm import complete as llm_complete
 from core.llm import extract_json
 from core.config import Config
 from core.exporter import Destination, Exporter
-from core.parser import RecordParser, SchemaField, is_error_page_title
+from core.parser import (FieldType, RecordParser, SchemaField,
+                         emails_in_markdown, is_error_page_title,
+                         norm_key, _is_name_field)
 
 TERMINAL_STATES = {"completed", "failed"}
 
@@ -275,6 +277,7 @@ class Orchestrator:
         notes: list[str] = []
         queries: list[str] = []
         scraped_urls: list[str] = []
+        wave2: dict[str, str] = {}  # company site -> name (harvested later)
 
         if not request.intent:
             self._finish(state, JobStatus.FAILED, _summary(state, [], [], [], skipped,
@@ -398,6 +401,15 @@ class Orchestrator:
                     result.markdown, result.url, result.title)
                 fresh = parser.ingest(candidates_records, result.url,
                                       result.markdown)
+                # Near-miss leads: name + website but no email on this page —
+                # wave 2 revisits the company's own site for the address.
+                if len(state.records) < max_records:
+                    for cand in candidates_records:
+                        if not isinstance(cand, dict):
+                            continue
+                        lead = _wave2_lead(cand, request.fields, result.url)
+                        if lead and lead[0] not in wave2:
+                            wave2[lead[0]] = lead[1]
                 for record in fresh:
                     if len(state.records) >= max_records:
                         stop.set()
@@ -410,6 +422,74 @@ class Orchestrator:
 
             tasks = [asyncio.create_task(worker(u)) for u in urls]
             await asyncio.gather(*tasks)
+
+            # ---- stage 4b: second-wave contact harvest ----------------------
+            # Listing pages that gave us name + website but no email get one
+            # focused revisit: the company's own homepage, then /contact,
+            # looking only for an address. Stops early once the target fills.
+            if (wave2 and not stop.is_set() and len(state.records) < max_records
+                    and bool(self.config.get("execution.wave2_enabled", True))):
+                already = set(scraped_urls)
+                leads = [(u, n) for u, n in wave2.items()
+                         if u not in already and u.rstrip("/") + "/contact" not in already]
+                cap = int(self.config.get("execution.wave2_max_pages", 25))
+                leads = leads[:cap]
+                if leads:
+                    self._stage(job_id, "extracting",
+                                f"Second wave: {len(leads)} company sites queued "
+                                "for contact emails")
+                    email_f = next((f for f in request.fields
+                                    if f.type is FieldType.EMAIL), None)
+                    name_f = next((f for f in request.fields
+                                   if _is_name_field(f)), None)
+                    url_f = next((f for f in request.fields
+                                  if f.type is FieldType.URL), None)
+                    for site, company in leads:
+                        if stop.is_set() or len(state.records) >= max_records:
+                            break
+                        found: str | None = None
+                        for page in (site, site.rstrip("/") + "/contact"):
+                            if stop.is_set():
+                                break
+                            try:
+                                result = await client.scrape(page)
+                            except (BlockedError, ScrapeError) as exc:
+                                skipped.append(SkipInfo(url=page,
+                                                        reason=str(exc)[:200]))
+                                continue
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as exc:  # noqa: BLE001
+                                skipped.append(SkipInfo(
+                                    url=page,
+                                    reason=f"{type(exc).__name__}: {exc}"[:200]))
+                                continue
+                            if is_error_page_title(result.title):
+                                continue
+                            scraped_urls.append(result.url)
+                            host = urlparse(result.url).hostname or ""
+                            found = emails_in_markdown(result.markdown,
+                                                       prefer_host=host)
+                            self._stage(
+                                job_id, "extracting",
+                                f"wave2 {result.url} — {len(state.records)}"
+                                f"/{max_records} records"
+                                + (f", found {found}" if found else ""))
+                            if found:
+                                break
+                            await asyncio.sleep(delay)
+                        if not found or not (email_f and name_f and url_f):
+                            continue
+                        candidate = {name_f.name: company,
+                                     email_f.name: found,
+                                     url_f.name: site}
+                        fresh = parser.ingest([candidate], site, "")
+                        for record in fresh:
+                            if len(state.records) >= max_records:
+                                stop.set()
+                                break
+                            state.records.append(record)
+                            self._record(job_id, record)
             await client.aclose()
 
             stats = parser.stats
@@ -595,6 +675,42 @@ def rank_search_results(results: list[SearchResult], intent: str) -> list[Search
                        int(bool(_NEWS_HINTS.search(item.url))), i, item))
     scored.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
     return [row[4] for row in scored]
+
+
+def _wave2_lead(candidate: dict[str, Any], fields: list[SchemaField],
+                source_url: str) -> tuple[str, str] | None:
+    """(website, company_name) when the sole gap is a missing email.
+
+    A directory row that lists a company name + website but hides the email
+    behind JS/forms is still a lead — wave 2 re-scrapes that company's own
+    site looking only for the address. Returns None when the candidate is
+    already complete, lacks identity, or would just re-scrape the listing
+    page itself.
+    """
+    email_f = next((f for f in fields if f.type is FieldType.EMAIL), None)
+    name_f = next((f for f in fields if _is_name_field(f)), None)
+    url_f = next((f for f in fields if f.type is FieldType.URL), None)
+    if not (email_f and name_f and url_f):
+        return None
+
+    def get(field: SchemaField) -> Any:
+        if field.name in candidate:
+            return candidate[field.name]
+        target = norm_key(field.name)
+        for key, value in candidate.items():
+            if norm_key(str(key)) == target:
+                return value
+        return None
+
+    if get(email_f):  # complete — nothing to harvest later
+        return None
+    name = str(get(name_f) or "").strip()
+    website = str(get(url_f) or "").strip()
+    if not name or not website or not website.startswith(("http://", "https://")):
+        return None
+    if website.rstrip("/") == source_url.rstrip("/"):
+        return None  # the listing page itself, not the company's site
+    return website, name
 
 
 def _summary(state: JobState, queries: list[str], sources: list[str],

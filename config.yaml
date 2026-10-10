@@ -21,6 +21,12 @@ execution:
   timeout_seconds: 60
   retry_attempts: 2
   retry_backoff_seconds: 10
+  # Second-wave contact harvest: directory rows that list a company name +
+  # website but hide the email behind JS/forms get one focused revisit —
+  # the company's own homepage, then /contact — looking only for an address.
+  # Runs after the main wave whenever the record target is still unmet.
+  wave2_enabled: true
+  wave2_max_pages: 25
   # Status codes treated as "blocked" — logged as a skip, job continues.
   block_status_codes: [401, 403, 429, 503, 999]
   # Domains never worth scraping (parked / pure noise heuristics).

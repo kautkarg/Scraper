@@ -917,4 +917,164 @@ def test_slogan_tail_name_not_accepted():
     assert not _looks_like_org_name("Award Winning")
     # 2-word openers still survive the start-of-name slogan rule ("Best Buy")
     assert _looks_like_org_name("Best Buy")
-    assert _looks_like_org_name("Zeta Labs")
+
+
+# --------------------------------------------------------------------------
+# yield: second-wave contact harvest (directories that list name + website
+# but hide the email behind JS/forms — revisit the company's own site)
+# --------------------------------------------------------------------------
+
+WAVE2_FIELDS = [
+    SchemaField(name="Company Name", type=FieldType.STRING, required=True),
+    SchemaField(name="email", type=FieldType.EMAIL, required=True),
+    SchemaField(name="website", type=FieldType.URL),
+]
+
+WAVE2_DIRECTORY = """<html><head><title>India SaaS Directory</title></head>
+<body><h1>India SaaS Directory</h1>
+<table>
+<tr><th>Company Name</th><th>website</th></tr>
+<tr><td>Zeta Labs</td><td>http://127.0.0.1:{port}/company-zeta</td></tr>
+<tr><td>Orbit CRM</td><td>http://127.0.0.1:{port}/company-orbit</td></tr>
+</table></body></html>"""
+
+WAVE2_COMPANY_ZETA = """<html><head><title>Zeta Labs</title></head>
+<body><h1>Zeta Labs</h1>
+<p>Contact the team at hello@zetalabs.io</p>
+<p>Visit https://zetalabs.io for more.</p></body></html>"""
+
+# Orbit's homepage has no email; its /contact page does.
+WAVE2_COMPANY_ORBIT_HOME = """<html><head><title>Orbit CRM</title></head>
+<body><h1>Orbit CRM</h1><p>CRM for modern teams.</p></body></html>"""
+
+WAVE2_COMPANY_ORBIT_CONTACT = """<html><head><title>Contact Orbit CRM</title></head>
+<body><h1>Contact us</h1>
+<p>Write to team@orbitcrm.in and we will reply within a day.</p></body></html>"""
+
+
+class _Wave2FixtureHandler(BaseHTTPRequestHandler):
+    def log_message(self, *args):  # silence
+        pass
+
+    def do_GET(self):
+        port = self.server.server_address[1]
+        if self.path.startswith("/wave2-directory"):
+            body = WAVE2_DIRECTORY.format(port=port)
+        elif self.path.startswith("/company-zeta"):
+            body = WAVE2_COMPANY_ZETA
+        elif self.path.startswith("/company-orbit/contact"):
+            body = WAVE2_COMPANY_ORBIT_CONTACT
+        elif self.path.startswith("/company-orbit"):
+            body = WAVE2_COMPANY_ORBIT_HOME
+        else:
+            self.send_response(404)
+            self.end_headers()
+            return
+        payload = body.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+@pytest.fixture(scope="module")
+def wave2_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Wave2FixtureHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    yield f"http://127.0.0.1:{port}"
+    server.shutdown()
+
+
+def test_wave2_lead_detects_name_and_site_without_email():
+    from core.orchestrator import _wave2_lead
+
+    lead = _wave2_lead(
+        {"Company Name": "Zeta Labs", "website": "https://zetalabs.io"},
+        WAVE2_FIELDS, "https://dir.example/india")
+    assert lead == ("https://zetalabs.io", "Zeta Labs")
+
+
+def test_wave2_lead_ignores_complete_records():
+    from core.orchestrator import _wave2_lead
+
+    assert _wave2_lead(
+        {"Company Name": "Zeta Labs", "email": "hi@zetalabs.io",
+         "website": "https://zetalabs.io"},
+        WAVE2_FIELDS, "https://dir.example/india") is None
+
+
+def test_wave2_lead_ignores_the_listing_page_itself():
+    """Heuristic URL cross-fill gives the source URL — never re-queue it."""
+    from core.orchestrator import _wave2_lead
+
+    assert _wave2_lead(
+        {"Company Name": "Zeta Labs", "website": "https://dir.example/india"},
+        WAVE2_FIELDS, "https://dir.example/india") is None
+
+
+def test_wave2_lead_requires_both_name_and_website():
+    from core.orchestrator import _wave2_lead
+
+    assert _wave2_lead({"website": "https://zetalabs.io"},
+                       WAVE2_FIELDS, "https://dir.example/") is None
+    assert _wave2_lead({"Company Name": "Zeta Labs"},
+                       WAVE2_FIELDS, "https://dir.example/") is None
+    assert _wave2_lead({"Company Name": "Zeta Labs", "website": "zetalabs.io"},
+                       WAVE2_FIELDS, "https://dir.example/") is None  # no scheme
+
+
+def test_emails_in_markdown_prefers_own_domain():
+    from core.parser import emails_in_markdown
+
+    md = "Mail us at info@vendor.example or founder@otherco.io anytime."
+    assert emails_in_markdown(md, prefer_host="www.vendor.example") \
+        == "info@vendor.example"
+
+
+def test_emails_in_markdown_skips_placeholders():
+    from core.parser import emails_in_markdown
+
+    assert emails_in_markdown("write to test@example.com") is None
+    assert emails_in_markdown("no addresses here") is None
+    # placeholder filtered, real one kept
+    assert emails_in_markdown("try verified@acme.io or hi@webzpapa.com") \
+        == "hi@webzpapa.com"
+
+
+async def test_wave2_harvest_completes_missing_emails(config, wave2_server):
+    """Directory hides emails; wave 2 revisits company sites and completes them."""
+    request = JobRequest(
+        intent="Find B2B SaaS startups in India with founder emails",
+        fields=WAVE2_FIELDS, destination=Destination.CSV, max_records=10,
+        seed_urls=[f"{wave2_server}/wave2-directory"])
+    state = BUS.create(request)
+    await Orchestrator(config).run(state)
+
+    summary = state.summary
+    assert summary is not None
+    assert state.status.value == "completed", summary.get("error")
+    assert summary["records_exported"] == 2
+    by_name = {r["company_name"]: r for r in state.records}
+    assert by_name["Zeta Labs"]["email"] == "hello@zetalabs.io"
+    assert by_name["Orbit CRM"]["email"] == "team@orbitcrm.in"
+    # wave 2 actually scraped the company sites
+    sources = " ".join(summary["sources_scraped"])
+    assert "company-zeta" in sources
+    assert "company-orbit" in sources
+
+
+async def test_wave2_disabled_skips_second_pass(config, wave2_server):
+    cfg = Config(cfg_mod._deep_merge(config.raw, {"execution": {"wave2_enabled": False}}))
+    request = JobRequest(
+        intent="Find B2B SaaS startups in India with founder emails",
+        fields=WAVE2_FIELDS, destination=Destination.JSON, max_records=10,
+        seed_urls=[f"{wave2_server}/wave2-directory"])
+    state = BUS.create(request)
+    await Orchestrator(cfg).run(state)
+
+    # directory rows lack the required email -> wave 1 alone yields nothing
+    assert state.status.value == "failed"
+    assert state.summary and "No valid records" in state.summary["error"]

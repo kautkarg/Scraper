@@ -594,6 +594,31 @@ def _registrable_host(host: str) -> str:
     return ".".join(parts[-2:]) if len(parts) >= 2 else ""
 
 
+def emails_in_markdown(markdown: str, prefer_host: str = "") -> str | None:
+    """First plausible email on a page for wave-2 contact harvesting.
+
+    Prefers an address at the page's own registrable domain (strong signal
+    it is the company's real contact), then any non-freemail, then any
+    non-placeholder match. Placeholder/local-part filters apply via _to_email.
+    """
+    found: list[str] = []
+    for match in EMAIL_RE.finditer(markdown or ""):
+        email = _to_email(match.group(0))
+        if email:
+            found.append(email)
+    if not found:
+        return None
+    if prefer_host:
+        host = _registrable_host(prefer_host)
+        for email in found:
+            if _registrable_host(email.rsplit("@", 1)[1]) == host:
+                return email
+    for email in found:
+        if not _is_freemail(email.rsplit("@", 1)[1]):
+            return email
+    return found[0]
+
+
 # Sentence-y / slogan shapes that never describe a legal entity.
 _SLOGAN_RE = re.compile(
     r"^(?:best|leading|top|trusted|award[- ]winning|your|get|find|we are|"
