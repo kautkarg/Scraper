@@ -1049,6 +1049,23 @@ def test_wave2_lead_requires_both_name_and_website():
                        WAVE2_FIELDS, "https://dir.example/") is None
 
 
+def test_to_url_unwraps_google_redirect():
+    """LLMs reading search results extract the /url?q= wrapper, not the
+    target — _to_url must decode it so records point at the real site."""
+    from core.parser import _to_url
+
+    wrapped = ("https://www.google.com/url?q=http%3A%2F%2Fmiter.com"
+               "&sa=D&source=editors&ust=1791651935020380")
+    assert _to_url(wrapped) == "http://miter.com"
+
+
+def test_to_url_leaves_normal_urls_alone():
+    from core.parser import _to_url
+
+    assert _to_url("https://zetalabs.io/about") == "https://zetalabs.io/about"
+    assert _to_url("zetalabs.io") == "https://zetalabs.io"
+
+
 def test_emails_in_markdown_prefers_own_domain():
     from core.parser import emails_in_markdown
 

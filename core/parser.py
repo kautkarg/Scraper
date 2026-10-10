@@ -12,7 +12,7 @@ import re
 from datetime import datetime
 from enum import Enum
 from typing import Any, Iterable
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -33,6 +33,11 @@ _PLACEHOLDER_EMAIL_LOCALS = frozenset({
 URL_RE = re.compile(r"https?://[^\s)\]>]+")
 URL_LIKE_RE = re.compile(r"^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/[^\s]*)?$", re.I)
 MARKDOWN_LINK_RE = re.compile(r"\[([^\]]*)\]\((https?://[^)]+)\)")
+
+# Search engines wrap outbound links as /url?q=<encoded>; an LLM reading a
+# results page extracts the wrapper, not the target. Unwrap before scoring.
+_GOOGLE_REDIRECT_RE = re.compile(
+    r"^https?://(?:www\.)?google\.[a-z.]+/url\?(?:[^#]*&)?q=([^&#]+)", re.I)
 
 _DATE_FORMATS = ("%Y-%m-%d", "%d %b %Y", "%b %d, %Y", "%B %d, %Y", "%d/%m/%Y",
                  "%m/%d/%Y", "%Y", "%d-%m-%Y")
@@ -99,13 +104,24 @@ def _to_email(value: Any) -> str | None:
     return email
 
 
+def _unwrap_redirect(url: str) -> str:
+    """Extract the real target from a search-engine /url?q= wrapper."""
+    match = _GOOGLE_REDIRECT_RE.match(url)
+    if not match:
+        return url
+    target = unquote(match.group(1))
+    if target.startswith(("http://", "https://")):
+        return target
+    return url
+
+
 def _to_url(value: Any, source_text: str = "") -> str | None:
     text = str(value or "").strip()
     if not text:
         return None
     match = URL_RE.search(text)
     if match:
-        return match.group(0).rstrip(".,;")
+        return _unwrap_redirect(match.group(0).rstrip(".,;"))
     # Prefer links that actually exist on the source page (anti-hallucination).
     for label, href in MARKDOWN_LINK_RE.findall(source_text):
         if text.lower() in label.lower() or label.lower() in text.lower():
